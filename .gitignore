@@ -9,7 +9,7 @@ results/
 result/
 .conda-env/*
 *.pkl
-given_models/.worktrees/
+.worktrees/
 *.log
 .DS_Store
 .superpowers/
