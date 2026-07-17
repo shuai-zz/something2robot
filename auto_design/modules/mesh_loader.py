@@ -437,9 +437,15 @@ class LinkTreeGUI(QtWidgets.QMainWindow):
         # Get the bounds of the mesh
         self.mesh_bounds = stl_mesh.bounds
         center = [(self.mesh_bounds[0] + self.mesh_bounds[1]) / 2, (self.mesh_bounds[2] + self.mesh_bounds[3]) / 2, (self.mesh_bounds[4] + self.mesh_bounds[5]) / 2]
+        extents = np.array([
+            self.mesh_bounds[1] - self.mesh_bounds[0],
+            self.mesh_bounds[3] - self.mesh_bounds[2],
+            self.mesh_bounds[5] - self.mesh_bounds[4],
+        ])
+        self.joint_marker_radius = np.linalg.norm(extents) * 0.015
         # Create a sphere (representing a point)
         self.shpere_position = center
-        self.sphere = pv.Sphere(radius=1, center=self.shpere_position)
+        self.sphere = pv.Sphere(radius=self.joint_marker_radius, center=self.shpere_position)
         # Add the STL mesh with transparency
         self.plotter.add_mesh(stl_mesh, opacity=0.5, color="lightblue")
         # Add a red sphere
@@ -479,7 +485,10 @@ class LinkTreeGUI(QtWidgets.QMainWindow):
         # Remove the old sphere
         self.plotter.remove_actor(self.sphere_actor)
         # Add a new sphere at the updated position
-        self.sphere_actor = self.plotter.add_mesh(pv.Sphere(radius=1, center=self.sphere_position), color="red")
+        self.sphere_actor = self.plotter.add_mesh(
+            pv.Sphere(radius=self.joint_marker_radius, center=self.sphere_position),
+            color="red",
+        )
         # Update the plotter to reflect changes
         self.plotter.render()
 
