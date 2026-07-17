@@ -600,17 +600,45 @@ class Joint_Connect_Opt:
                 direction /= np.linalg.norm(direction)
                 father_name = self.father_dict[link.name]
                 opening = (motor_param[:3] + motor_param[3:6]) / 2.0
+                part_names = (father_name, link.name)
+                part_voxels_by_name = {
+                    name: self.mesh_decomp.mesh_group.get_voxels(name)
+                    for name in part_names
+                }
+
+                def direction_counts(points, pocket_opening):
+                    return (
+                        np.count_nonzero(inside_blind_cylinder(points, pocket_opening, direction)),
+                        np.count_nonzero(inside_blind_cylinder(points, pocket_opening, -direction)),
+                    )
+
+                # Some annotations sit slightly outside the voxelized surface. Snap
+                # the shared opening halfway between the nearest voxels on both parts.
+                if any(max(direction_counts(points, opening)) == 0
+                       for points in part_voxels_by_name.values()):
+                    nearest_points = [
+                        points[np.argmin(np.linalg.norm(points - opening, axis=1))]
+                        for points in part_voxels_by_name.values()
+                    ]
+                    opening = np.mean(nearest_points, axis=0)
 
                 # Axis annotations do not encode which side belongs to which link.
                 # Pick the direction containing more voxels independently for each part.
-                for part_name in (father_name, link.name):
-                    part_voxels = self.mesh_decomp.mesh_group.get_voxels(part_name)
-                    positive_count = np.count_nonzero(inside_blind_cylinder(part_voxels, opening, direction))
-                    negative_count = np.count_nonzero(inside_blind_cylinder(part_voxels, opening, -direction))
+                for part_name in part_names:
+                    part_voxels = part_voxels_by_name[part_name]
+                    part_opening = opening
+                    positive_count, negative_count = direction_counts(part_voxels, part_opening)
+                    if max(positive_count, negative_count) == 0:
+                        # Last-resort snap for a gap wider than one voxel. The two
+                        # pocket axes remain parallel, while each opens on its surface.
+                        part_opening = part_voxels[
+                            np.argmin(np.linalg.norm(part_voxels - opening, axis=1))
+                        ]
+                        positive_count, negative_count = direction_counts(part_voxels, part_opening)
                     inward = direction if positive_count >= negative_count else -direction
                     self.mesh_decomp.mesh_group.move_voxels(
                         initial_group_names=[part_name], target_group_name="Unoccupied",
-                        condition_func=lambda pts, p=opening.copy(), d=inward.copy():
+                        condition_func=lambda pts, p=part_opening.copy(), d=inward.copy():
                             inside_blind_cylinder(pts, p, d))
                     remaining_count = len(self.mesh_decomp.mesh_group.get_voxels(part_name))
                     removed_counts.append((part_name, len(part_voxels) - remaining_count))
