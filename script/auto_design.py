@@ -1,6 +1,7 @@
 import os
 import argparse
 import numpy as np
+import random
 import pickle as pkl
 import time
 # Add dependencies path
@@ -26,6 +27,16 @@ from modules.destruction_check import destruction_check, destruction_check_urdf_
 # from metamaterial_filling.script.user_stl_force_relative_density_fea_opt import stl_force_relative_density_fea_opt
 # from metamaterial_filling.script.pyansys_fea.mapdl_msh_analysis import MapdlFea
 from motor_param_lib import MotorParameterLib
+
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif value.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError(f"Boolean value expected, got {value!r}")
 
 '''
 This class is used to log the process of the optimization. The log contains a txt file and a pkl file to store the variables.
@@ -395,21 +406,26 @@ if __name__=="__main__":
     parser.add_argument('--voxel_size', type=float, default=0.5, help='The size of the voxel. (cm)')
     parser.add_argument('--voxel_density', type=float, default=1.2e-4, help='The estimated density of the voxel depending on the material. (kg/cm^3)')
     parser.add_argument('--joint_limitation', type=float, default=0.5, help='The limitation of the joint. +-joint_limitation. (rad)')
-    parser.add_argument('--joint_limitation_from_champ', type=bool, default=True, help='Use champ controller or not. This will affect joint limits.')
+    parser.add_argument('--joint_limitation_from_champ', type=str2bool, default=True, help='Use champ controller or not. This will affect joint limits.')
 
     parser.add_argument('--max_trial_round', type=int, default=8, help='The maximum number of trial rounds.')
     parser.add_argument('--genetic_generation', type=int, default=5, help='The number of generations for the genetic algorithm')
-    parser.add_argument('--do_fea_analysis', type=bool, default=False, help='Do FEA analysis or not. If true, please make sure you have Ansys installed.')
-    parser.add_argument('--regenerate_if_fea_failed', type=bool, default=False, help='Regenerate the model if the FEA analysis failed or not. FEAs are expensive and strict.')
+    parser.add_argument('--do_fea_analysis', type=str2bool, default=False, help='Do FEA analysis or not. If true, please make sure you have Ansys installed.')
+    parser.add_argument('--regenerate_if_fea_failed', type=str2bool, default=False, help='Regenerate the model if the FEA analysis failed or not. FEAs are expensive and strict.')
 
-    parser.add_argument('--visualize', type=bool, default=True, help='Visualize the process or not. Need to close the windows to continue the process if turned on.')
-    parser.add_argument('--disable_joint_setting_ui', type=bool, default=False, help='Disable the joint setting UI or not')
-    parser.add_argument('--joint_setting_standard_scale', type=bool, default=False, help='Scale the model to a standard scale for easier joint setting in the UI or not')
+    parser.add_argument('--visualize', type=str2bool, default=True, help='Visualize the process or not. Need to close the windows to continue the process if turned on.')
+    parser.add_argument('--disable_joint_setting_ui', type=str2bool, default=False, help='Disable the joint setting UI or not')
+    parser.add_argument('--joint_setting_standard_scale', type=str2bool, default=False, help='Scale the model to a standard scale for easier joint setting in the UI or not')
 
     ### No need to set model_name. This is a temporary value. It will be removed in the future.
     parser.add_argument('--model_name', type=str, default='None', help='Temporary value. No need to set this value.')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility. If set, random and numpy random will be seeded.')
 
     args = parser.parse_args()
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
 
     auto_design_function(args)
     

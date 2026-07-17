@@ -86,6 +86,36 @@ mkdir data
 
 
 
+## Agent 快速入口
+
+项目根目录提供 `run.py`，外部 agent 可以一键完成从 given model 到可打印 mm 单位 STL 的完整流程：
+
+```bash
+uv run python run.py --model lamp --expected-x 30 --voxel-size 0.4 --seed 42 --out-dir result_agent_lamp
+```
+
+常用参数：
+
+| 参数 | 说明 |
+|------|------|
+| `--model` | `auto_design/model/given_models/` 中的模型名（前缀匹配），如 `lamp`、`cactus`、`mario` |
+| `--expected-x` | 目标打印尺寸（mm） |
+| `--voxel-size` | 体素大小（mm），越小越精细但越慢 |
+| `--seed` | 随机种子，保证可复现 |
+| `--genetic-generation` | 遗传算法代数（默认 5） |
+| `--repair` | 对断成多部分的连杆只保留最大连通块 |
+| `--skip-motors` | 跳过电机可视化导出 |
+
+输出结构：
+
+```
+out-dir/
+├── parts/          # 原始 URDF 和米单位 STL
+├── parts_mm/       # 毫米单位 STL，可直接导入 OrcaSlicer 打印
+├── motors/         # 电机位置可视化 STL（mm）
+└── report.json     # 运行报告（配置、耗时、连杆连通性、文件清单）
+```
+
 ## Usage
 ### Auto Design with 3D Model and Joints
 This repo assumes a '.stl' 3D model has been acquired by AI text/image to 3D model tools like Meshy. Make sure the model is scaled to a reasonable size, such as 20 cm - 100 cm. You can use ```metamaterial_filling/build/scaleMesh``` to scale the model.

@@ -400,12 +400,12 @@ class LinkTreeGUI(QtWidgets.QMainWindow):
         # Set slider ranges using self.mesh_bounds
         bound = self.mesh_bounds
         self.mesh_middle_point = [(bound[0] + bound[1]) / 2, (bound[2] + bound[3]) / 2, (bound[4] + bound[5]) / 2]
-        self.slider_x.setRange(bound[0], bound[1])
-        self.slider_y.setRange(bound[2], bound[3])
-        self.slider_z.setRange(bound[4], bound[5])
-        self.slider_x.setValue(self.mesh_middle_point[0])
-        self.slider_y.setValue(self.mesh_middle_point[1])
-        self.slider_z.setValue(self.mesh_middle_point[2])
+        self.slider_x.setRange(int(bound[0]), int(bound[1]))
+        self.slider_y.setRange(int(bound[2]), int(bound[3]))
+        self.slider_z.setRange(int(bound[4]), int(bound[5]))
+        self.slider_x.setValue(int(self.mesh_middle_point[0]))
+        self.slider_y.setValue(int(self.mesh_middle_point[1]))
+        self.slider_z.setValue(int(self.mesh_middle_point[2]))
 
         # Update the min, max of the joint_x_input based on the mesh bounds
         self.joint_x_input.setRange(bound[0], bound[1])
@@ -468,9 +468,9 @@ class LinkTreeGUI(QtWidgets.QMainWindow):
         y = self.joint_y_input.value()
         z = self.joint_z_input.value()
 
-        self.slider_x.setValue(x)
-        self.slider_y.setValue(y)
-        self.slider_z.setValue(z)
+        self.slider_x.setValue(int(x))
+        self.slider_y.setValue(int(y))
+        self.slider_z.setValue(int(z))
     
     def update_sphere_position(self, new_position):
         """ Update the sphere position and refresh the plot """

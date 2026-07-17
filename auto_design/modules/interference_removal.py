@@ -213,7 +213,7 @@ class RobotOptResult:
         # o3d.visualization.draw_geometries([mesh] + tenon_vector_o3d)
         
         # 2. Add force and torque information
-        pkg_dir = './..'
+        pkg_dir = '.'
         model, collision_model, visual_model = pin.buildModelsFromUrdf(self.urdf_dir, pkg_dir)
         data = model.createData()
         max_torque = np.zeros((model.nv))
@@ -624,9 +624,9 @@ class InterferenceRemoval:
             # Keep the string after the package name
             written_in_dir = dir[dir.index(package_name) + len(package_name):]
         else:
-            written_in_dir = dir
+            written_in_dir = os.path.relpath(dir, '.') + '/'
 
-        if written_in_dir[0] == '/':
+        if written_in_dir.startswith('/'):
             written_in_dir = written_in_dir[1:]
 
         while node_queue:
