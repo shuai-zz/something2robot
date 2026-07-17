@@ -563,6 +563,65 @@ class Joint_Connect_Opt:
         for link_name in self.father_dict:  # NOTE: This self.father_dict changed to a string dict here!!!!!. TODO: Use a nicer way.
             self.father_dict[link_name] = self.father_dict[link_name].name
 
+    def add_magnet_pockets(self):
+        """Carve blind cylindrical magnet pockets into both sides of each joint."""
+        pocket_radius = (self.args.magnet_diameter + self.args.magnet_clearance) / 2.0
+        pocket_depth = self.args.magnet_thickness + self.args.magnet_clearance / 2.0
+        if pocket_radius <= 0 or pocket_depth <= 0:
+            raise ValueError("Magnet diameter, thickness, and resulting pocket dimensions must be positive.")
+        # Include voxels intersecting the requested cylinder, not only voxels whose
+        # centres happen to fall inside it.
+        sample_margin = self.args.voxel_size * np.sqrt(3) / 2.0
+        sampled_radius = pocket_radius + sample_margin
+        sampled_depth = pocket_depth + self.args.voxel_size / 2.0
+
+        def inside_blind_cylinder(points, opening, inward):
+            inward = np.asarray(inward, dtype=float)
+            inward /= np.linalg.norm(inward)
+            relative = points - opening
+            axial = relative @ inward
+            radial = relative - np.outer(axial, inward)
+            return (axial >= -sample_margin) & (axial <= sampled_depth) & (np.linalg.norm(radial, axis=1) <= sampled_radius)
+
+        queue = [self.mesh_decomp.link_tree]
+        motor_idx = 0
+        removed_counts = []
+        while queue:
+            node = queue.pop(0)
+            queue.extend(node.children)
+            link = node.val
+            if link.axis is None or np.linalg.norm(link.axis[1]) == 0:
+                continue
+
+            joint_count = 2 if len(link.axis) == 3 else 1
+            for _ in range(joint_count):
+                motor_param = self.motor_params_results[motor_idx]
+                direction = np.asarray(motor_param[3:6] - motor_param[:3], dtype=float)
+                direction /= np.linalg.norm(direction)
+                father_name = self.father_dict[link.name]
+                opening = (motor_param[:3] + motor_param[3:6]) / 2.0
+
+                # Axis annotations do not encode which side belongs to which link.
+                # Pick the direction containing more voxels independently for each part.
+                for part_name in (father_name, link.name):
+                    part_voxels = self.mesh_decomp.mesh_group.get_voxels(part_name)
+                    positive_count = np.count_nonzero(inside_blind_cylinder(part_voxels, opening, direction))
+                    negative_count = np.count_nonzero(inside_blind_cylinder(part_voxels, opening, -direction))
+                    inward = direction if positive_count >= negative_count else -direction
+                    self.mesh_decomp.mesh_group.move_voxels(
+                        initial_group_names=[part_name], target_group_name="Unoccupied",
+                        condition_func=lambda pts, p=opening.copy(), d=inward.copy():
+                            inside_blind_cylinder(pts, p, d))
+                    remaining_count = len(self.mesh_decomp.mesh_group.get_voxels(part_name))
+                    removed_counts.append((part_name, len(part_voxels) - remaining_count))
+                motor_idx += 1
+
+        empty_pockets = [name for name, count in removed_counts if count == 0]
+        if empty_pockets:
+            raise ValueError("Magnet pocket did not intersect these links: " + ", ".join(empty_pockets))
+        print(f"Added magnet pockets: diameter={pocket_radius * 2:.3f} cm, "
+              f"depth={pocket_depth:.3f} cm, removed_voxels={removed_counts}")
+
     '''
     Connect the voxels from the start_idxs to the end_idxs in all the occupied voxels
     '''
@@ -1002,5 +1061,3 @@ if __name__=="__main__":
     # pkl.dump(mesh_decomp.mesh_group, open('./results/' + args.model_name + '_mesh_group.pkl', 'wb'))
     # pkl.dump(mesh_decomp.link_tree, open('./results/' + args.model_name + '_link_tree.pkl', 'wb'))
     # pkl.dump(mesh_decomp.father_link_dict, open('./results/' + args.model_name + '_father_link_dict.pkl', 'wb'))
-
-    

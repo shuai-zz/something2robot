@@ -179,7 +179,9 @@ class AutoDesignArgs:
 
 
 def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
-               genetic_generation=5, max_trial_round=8, voxel_density=1.2e-4):
+               genetic_generation=5, max_trial_round=8, voxel_density=1.2e-4,
+               connector_mode='motor', magnet_diameter=6.0,
+               magnet_thickness=2.0, magnet_clearance=0.2):
     args = AutoDesignArgs()
     args.stl_mesh_path = os.path.abspath(stl_path)
     args.joint_pkl_path = os.path.abspath(joints_path)
@@ -198,6 +200,11 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.joint_setting_standard_scale = False
     args.model_name = 'None'
     args.seed = seed
+    args.connector_mode = connector_mode
+    # The auto-design core works in centimetres; the public CLI uses millimetres.
+    args.magnet_diameter = magnet_diameter / 10.0
+    args.magnet_thickness = magnet_thickness / 10.0
+    args.magnet_clearance = magnet_clearance / 10.0
     return args
 
 
@@ -221,11 +228,25 @@ def main():
                         help='Repair disconnected STL links by keeping largest component')
     parser.add_argument('--skip-motors', action='store_true',
                         help='Skip motor visualization export')
+    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'none'), default='motor',
+                        help='Joint interface: existing motor shell, magnet pockets, or plain split (default: motor)')
+    parser.add_argument('--magnet-diameter', type=float, default=6.0,
+                        help='Magnet diameter in mm, used with --connector-mode magnet (default: 6.0)')
+    parser.add_argument('--magnet-thickness', type=float, default=2.0,
+                        help='Magnet thickness/pocket depth in mm (default: 2.0)')
+    parser.add_argument('--magnet-clearance', type=float, default=0.2,
+                        help='Added diametral pocket clearance in mm (default: 0.2)')
     parser.add_argument('--max-trial-round', type=int, default=8,
                         help='Maximum auto-design trial rounds (default: 8)')
     parser.add_argument('--voxel-density', type=float, default=1.2e-4,
                         help='Voxel density in kg/cm^3 (default: 1.2e-4). Lower value reduces mass and motor torque requirements.')
     args_cli = parser.parse_args()
+
+    if args_cli.connector_mode == 'magnet':
+        if args_cli.magnet_diameter <= 0 or args_cli.magnet_thickness <= 0:
+            parser.error('--magnet-diameter and --magnet-thickness must be positive')
+        if args_cli.magnet_clearance < 0:
+            parser.error('--magnet-clearance cannot be negative')
 
     start_time = time.time()
     report = {
@@ -238,6 +259,10 @@ def main():
         'max_trial_round': args_cli.max_trial_round,
         'repair': args_cli.repair,
         'skip_motors': args_cli.skip_motors,
+        'connector_mode': args_cli.connector_mode,
+        'magnet_diameter_mm': args_cli.magnet_diameter,
+        'magnet_thickness_mm': args_cli.magnet_thickness,
+        'magnet_clearance_mm': args_cli.magnet_clearance,
         'project_root': project_root,
         'timings': {},
         'paths': {},
@@ -285,6 +310,10 @@ def main():
         genetic_generation=args_cli.genetic_generation,
         max_trial_round=args_cli.max_trial_round,
         voxel_density=args_cli.voxel_density,
+        connector_mode=args_cli.connector_mode,
+        magnet_diameter=args_cli.magnet_diameter,
+        magnet_thickness=args_cli.magnet_thickness,
+        magnet_clearance=args_cli.magnet_clearance,
     )
 
     design_start = time.time()
@@ -350,7 +379,7 @@ def main():
 
     # Export motors
     motors_folder = os.path.join(out_dir, 'motors')
-    if not args_cli.skip_motors:
+    if not args_cli.skip_motors and args_cli.connector_mode == 'motor':
         pkl_path = os.path.join(round_folder, 'robot_result.pkl')
         if not os.path.isfile(pkl_path):
             report['notes'].append(f"robot_result.pkl not found; skipping motor export.")
@@ -361,6 +390,8 @@ def main():
                 report['motor_files'] = motor_files
             except Exception as e:
                 report['notes'].append(f"export_motors_from_pkl failed: {e}")
+    elif args_cli.connector_mode != 'motor':
+        report['notes'].append(f"Motor export disabled for connector mode '{args_cli.connector_mode}'.")
     else:
         report['notes'].append("Motor export skipped by --skip-motors.")
 

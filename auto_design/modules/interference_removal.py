@@ -133,11 +133,13 @@ class RobotOptResult:
                 self.link_dict[current_link.name] = LinkResult()
                 tenon_pos = (motor_child_side + self.tenon_height * motor_direct) / 100.0
                 tenon_direct = -motor_direct
-                self.link_dict[current_link.name].add_tenon_pos(np.hstack((tenon_pos, tenon_direct)), 'child', motor_idx) 
+                if getattr(self.args, 'connector_mode', 'motor') == 'motor':
+                    self.link_dict[current_link.name].add_tenon_pos(np.hstack((tenon_pos, tenon_direct)), 'child', motor_idx)
 
                 tenon_pos_father = (motor_father_side - self.tenon_height * motor_direct) / 100.0
                 tenon_direct_father = motor_direct
-                self.link_dict[self.father_link_dict[current_link.name]].add_tenon_pos(np.hstack((tenon_pos_father, tenon_direct_father)), 'father', motor_idx)
+                if getattr(self.args, 'connector_mode', 'motor') == 'motor':
+                    self.link_dict[self.father_link_dict[current_link.name]].add_tenon_pos(np.hstack((tenon_pos_father, tenon_direct_father)), 'father', motor_idx)
                 cur_idx += 1
             
             elif len(current_link.axis) == 3:
@@ -157,11 +159,13 @@ class RobotOptResult:
                 self.link_dict[current_link.name] = LinkResult()
                 tenon_pos = (motor_child_side + self.tenon_height * motor_direct1) / 100.0
                 tenon_direct = -motor_direct1
-                self.link_dict[current_link.name].add_tenon_pos(np.hstack((tenon_pos, tenon_direct)), 'child', motor_idx1) 
+                if getattr(self.args, 'connector_mode', 'motor') == 'motor':
+                    self.link_dict[current_link.name].add_tenon_pos(np.hstack((tenon_pos, tenon_direct)), 'child', motor_idx1)
 
                 tenon_pos_father = (motor_father_side - self.tenon_height * motor_direct2) / 100.0
                 tenon_direct_father = -motor_direct2
-                self.link_dict[self.father_link_dict[current_link.name]].add_tenon_pos(np.hstack((tenon_pos_father, tenon_direct_father)), 'father', motor_idx2)
+                if getattr(self.args, 'connector_mode', 'motor') == 'motor':
+                    self.link_dict[self.father_link_dict[current_link.name]].add_tenon_pos(np.hstack((tenon_pos_father, tenon_direct_father)), 'father', motor_idx2)
                 cur_idx += 2
         
         #check the tenon position with mesh
@@ -703,7 +707,7 @@ class InterferenceRemoval:
                     write_link(urdf_file=urdf_file, link_name=cur_link.name + '_virtual')
                     joint1 = {
                         "joint_name": cur_link.name + '_joint1',
-                        "joint_type": "revolute",
+                        "joint_type": "revolute" if getattr(self.args, 'connector_mode', 'motor') == 'motor' else "fixed",
                         "parent_link": self.father_link_dict[cur_link.name],
                         "child_link": cur_link.name + '_virtual',
                         "origin": {"xyz": ' '.join(map(str, rel_pos)), "rpy": "0 0 0"},
@@ -714,7 +718,7 @@ class InterferenceRemoval:
                     motor2_pos, motor2_direct, motor_radius = self.link_motor_dict[cur_link.name][0]
                     joint2 = {
                         "joint_name": cur_link.name + '_joint2',
-                        "joint_type": "revolute",
+                        "joint_type": "revolute" if getattr(self.args, 'connector_mode', 'motor') == 'motor' else "fixed",
                         "parent_link": cur_link.name + '_virtual',
                         "child_link": cur_link.name,
                         "origin": {"xyz": ' '.join(map(str, (motor2_pos - motor_pos) / 100.0)), "rpy": "0 0 0"},
@@ -728,7 +732,7 @@ class InterferenceRemoval:
                 elif len(cur_link.axis) == 2:
                     cur_joint = {
                         "joint_name": cur_link.name + '_joint',
-                        "joint_type": "revolute",
+                        "joint_type": "revolute" if getattr(self.args, 'connector_mode', 'motor') == 'motor' else "fixed",
                         "parent_link": self.father_link_dict[cur_link.name],
                         "child_link": cur_link.name,
                         "origin": {"xyz": ' '.join(map(str, rel_pos)), "rpy": "0 0 0"},
