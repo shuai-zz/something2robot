@@ -407,18 +407,26 @@ class Mesh_Decomp:
                 # If the joint belongs to only one link, assign the voxel to that link
                 self.decompose_result[i] = all_joints[closest_joint][0][0]
             else:
-                # If the joint belongs to multiple links, find the closest line segment
+                # If the joint belongs to multiple links, find the closest line segment.
+                # For links with only one joint (no segments), fall back to point-to-joint distance.
                 min_segment_distance = float('inf')
                 closest_link = None
-                for link_name, _ in all_joints[closest_joint]:
-                    for segment in link_segments[link_name]:
-                        segment_distance = point_to_segment_distance(voxel, segment)
-                        if segment_distance < min_segment_distance:
-                            min_segment_distance = segment_distance
+                for link_name, joint_pos_for_link in all_joints[closest_joint]:
+                    if len(link_segments[link_name]) == 0:
+                        dist = np.linalg.norm(voxel - joint_pos_for_link)
+                        if dist < min_segment_distance:
+                            min_segment_distance = dist
                             closest_link = link_name
+                    else:
+                        for segment in link_segments[link_name]:
+                            segment_distance = point_to_segment_distance(voxel, segment)
+                            if segment_distance < min_segment_distance:
+                                min_segment_distance = segment_distance
+                                closest_link = link_name
                 self.decompose_result[i] = closest_link
 
         #  Update mesh_group with decomposed voxels and perform clustering for each link
+        discarded = []  # (voxel, original_link) pairs cut off from the largest cluster
         for link_name in tqdm.tqdm(np.unique(self.decompose_result)):
             if link_name != 'UNCLASSIFIED':
                 link_voxels = self.occupied_voxels[self.decompose_result == link_name]
@@ -437,19 +445,42 @@ class Mesh_Decomp:
                     mask = labels == largest_cluster
                     largest_cluster_voxels = link_voxels[mask]
                     
-                    # # Update decompose_result for this link
-                    # link_indices = np.where(self.decompose_result == link_name)[0]
-                    # self.decompose_result[link_indices[~mask]] = "UNCLASSIFIED"
-                    
                     # Update mesh_group with the largest cluster of voxels for this link
                     self.mesh_group.set_voxels(link_name, largest_cluster_voxels)
 
-                    # Make the rest of the voxels unoccupied
-                    unoccupied_voxels = link_voxels[~mask]
-                    self.mesh_group.set_voxels("Unoccupied", unoccupied_voxels)
+                    # Collect the rest for reassignment (see below)
+                    for voxel in link_voxels[~mask]:
+                        discarded.append((voxel, link_name))
                 else:
                     # If there's only one cluster, keep all voxels
                     self.mesh_group.set_voxels(link_name, link_voxels)
+
+        # Voxels cut off from their link's largest cluster are still real model
+        # material. The nearest-segment rule can misassign voxels to a nearby
+        # link (e.g. the maneki_neko face ends up in the raised arm's cluster);
+        # simply dropping them to Unoccupied deletes geometry from the output.
+        # Reassign them to the closest remaining link instead.
+        if discarded and len(all_links) > 1:
+            reassign_counts = {}
+            for voxel, original_link in discarded:
+                best_link = None
+                best_dist = float('inf')
+                for link_name in all_links:
+                    if link_name == original_link:
+                        continue
+                    dists = [point_to_segment_distance(voxel, seg) for seg in link_segments[link_name]]
+                    if not dists:  # Link with a single joint: fall back to point-to-joint distance
+                        dists = [min(np.linalg.norm(voxel - jp) for jp in all_links[link_name].joints.values())]
+                    dist = min(dists)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_link = link_name
+                self.mesh_group.set_voxels(best_link, np.asarray([voxel]))
+                reassign_counts[best_link] = reassign_counts.get(best_link, 0) + 1
+            print(f"Reassigned {len(discarded)} disconnected voxels to other links: {reassign_counts}")
+        elif discarded:
+            # Only one link exists: nothing to reassign to, keep the old behaviour
+            self.mesh_group.set_voxels("Unoccupied", np.asarray([voxel for voxel, _ in discarded]))
         
         # Print the number of voxels for each link
         print("Number of clusters: ", len(self.mesh_group.link_value_dict.keys()))

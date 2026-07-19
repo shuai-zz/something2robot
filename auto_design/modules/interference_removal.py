@@ -657,7 +657,7 @@ class InterferenceRemoval:
                 inetial_matrix, CoM = calculate_inertia_tensor(self.mesh_group.get_voxels("BODY") / 100.0, part_mass, np.eye(4))
                 link_inertial = {
                     "origin": {"xyz": ' '.join(map(str, CoM)), "rpy": '0 0 0'},
-                    "mass": str(self.mesh_group.get_voxels("BODY").shape[0] * self.args.voxel_density),
+                    "mass": str(part_mass),
                     "inertia": {"ixx": inetial_matrix[0, 0], "iyy": inetial_matrix[1, 1], "izz": inetial_matrix[2, 2], "ixy": inetial_matrix[0, 1], "ixz": inetial_matrix[0, 2], "iyz": inetial_matrix[1, 2]}
                 }
                 write_link(urdf_file=urdf_file, link_name="BODY", visual=link_visual, collision=link_collision, inertial=link_inertial)
@@ -693,7 +693,7 @@ class InterferenceRemoval:
             inetial_matrix, CoM = calculate_inertia_tensor(self.mesh_group.get_voxels(cur_link.name) / 100.0, part_mass, np.eye(4))
             link_inertial = {
                 "origin": {"xyz": ' '.join(map(str, CoM + (rel_pos - motor_pos) / 100.0)), "rpy": '0 0 0'},
-                "mass": str(self.mesh_group.get_voxels(cur_link.name).shape[0] * self.args.voxel_density),
+                "mass": str(part_mass),
                 "inertia": {"ixx": inetial_matrix[0, 0], "iyy": inetial_matrix[1, 1], "izz": inetial_matrix[2, 2], "ixy": inetial_matrix[0, 1], "ixz": inetial_matrix[0, 2], "iyz": inetial_matrix[1, 2]}
             }
             write_link(urdf_file=urdf_file, link_name=cur_link.name, visual=link_visual, collision=link_collision, inertial=link_inertial)
@@ -707,7 +707,7 @@ class InterferenceRemoval:
                     write_link(urdf_file=urdf_file, link_name=cur_link.name + '_virtual')
                     joint1 = {
                         "joint_name": cur_link.name + '_joint1',
-                        "joint_type": "revolute" if getattr(self.args, 'connector_mode', 'motor') == 'motor' else "fixed",
+                        "joint_type": "fixed" if getattr(self.args, 'connector_mode', 'motor') == 'none' else "revolute",
                         "parent_link": self.father_link_dict[cur_link.name],
                         "child_link": cur_link.name + '_virtual',
                         "origin": {"xyz": ' '.join(map(str, rel_pos)), "rpy": "0 0 0"},
@@ -718,7 +718,7 @@ class InterferenceRemoval:
                     motor2_pos, motor2_direct, motor_radius = self.link_motor_dict[cur_link.name][0]
                     joint2 = {
                         "joint_name": cur_link.name + '_joint2',
-                        "joint_type": "revolute" if getattr(self.args, 'connector_mode', 'motor') == 'motor' else "fixed",
+                        "joint_type": "fixed" if getattr(self.args, 'connector_mode', 'motor') == 'none' else "revolute",
                         "parent_link": cur_link.name + '_virtual',
                         "child_link": cur_link.name,
                         "origin": {"xyz": ' '.join(map(str, (motor2_pos - motor_pos) / 100.0)), "rpy": "0 0 0"},
@@ -732,7 +732,7 @@ class InterferenceRemoval:
                 elif len(cur_link.axis) == 2:
                     cur_joint = {
                         "joint_name": cur_link.name + '_joint',
-                        "joint_type": "revolute" if getattr(self.args, 'connector_mode', 'motor') == 'motor' else "fixed",
+                        "joint_type": "fixed" if getattr(self.args, 'connector_mode', 'motor') == 'none' else "revolute",
                         "parent_link": self.father_link_dict[cur_link.name],
                         "child_link": cur_link.name,
                         "origin": {"xyz": ' '.join(map(str, rel_pos)), "rpy": "0 0 0"},
@@ -839,7 +839,7 @@ class InterferenceRemoval:
                 inetial_matrix, CoM = calculate_inertia_tensor((self.mesh_group.get_voxels("BODY") - np.array([[10,0,25]])) / 100.0, part_mass, np.eye(4))
                 link_inertial = {
                     "origin": {"xyz": ' '.join(map(str, CoM)), "rpy": '0 0 0'},
-                    "mass": str(self.mesh_group.get_voxels("BODY").shape[0] * self.args.voxel_density),
+                    "mass": str(part_mass),
                     "inertia": {"ixx": inetial_matrix[0, 0], "iyy": inetial_matrix[1, 1], "izz": inetial_matrix[2, 2], "ixy": inetial_matrix[0, 1], "ixz": inetial_matrix[0, 2], "iyz": inetial_matrix[1, 2]}
                 }
                 write_link(urdf_file=urdf_file, link_name="BODY", visual=link_visual, collision=link_collision, inertial=link_inertial)
@@ -876,7 +876,7 @@ class InterferenceRemoval:
             inetial_matrix, CoM = calculate_inertia_tensor(self.mesh_group.get_voxels(cur_link.name) / 100.0, part_mass, np.eye(4))
             link_inertial = {
                 "origin": {"xyz": ' '.join(map(str, CoM + (rel_pos - motor_pos) / 100.0)), "rpy": '0 0 0'},
-                "mass": str(self.mesh_group.get_voxels(cur_link.name).shape[0] * self.args.voxel_density),
+                "mass": str(part_mass),
                 "inertia": {"ixx": inetial_matrix[0, 0], "iyy": inetial_matrix[1, 1], "izz": inetial_matrix[2, 2], "ixy": inetial_matrix[0, 1], "ixz": inetial_matrix[0, 2], "iyz": inetial_matrix[1, 2]}
             }
             write_link(urdf_file=urdf_file, link_name=cur_link.name, visual=link_visual, collision=link_collision, inertial=link_inertial)

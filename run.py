@@ -186,8 +186,9 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.stl_mesh_path = os.path.abspath(stl_path)
     args.joint_pkl_path = os.path.abspath(joints_path)
     args.result_folder = os.path.abspath(out_dir)
-    args.expected_x = expected_x
-    args.voxel_size = voxel_size
+    # The auto-design core works in centimetres; the public CLI uses millimetres.
+    args.expected_x = expected_x / 10.0
+    args.voxel_size = voxel_size / 10.0
     args.voxel_density = voxel_density
     args.joint_limitation = 0.5
     args.joint_limitation_from_champ = True
@@ -201,7 +202,6 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.model_name = 'None'
     args.seed = seed
     args.connector_mode = connector_mode
-    # The auto-design core works in centimetres; the public CLI uses millimetres.
     args.magnet_diameter = magnet_diameter / 10.0
     args.magnet_thickness = magnet_thickness / 10.0
     args.magnet_clearance = magnet_clearance / 10.0
@@ -223,7 +223,7 @@ def main():
     parser.add_argument('--genetic-generation', type=int, default=5,
                         help='Genetic algorithm generations (default: 5)')
     parser.add_argument('--out-dir', type=str, default=None,
-                        help='Output directory (default: result_agent_<model>)')
+                        help='Output directory (default: result/<model>)')
     parser.add_argument('--repair', action='store_true',
                         help='Repair disconnected STL links by keeping largest component')
     parser.add_argument('--skip-motors', action='store_true',
@@ -288,7 +288,7 @@ def main():
         raise
 
     # Determine output directory
-    out_dir = args_cli.out_dir or f"result_agent_{model_stem}"
+    out_dir = args_cli.out_dir or os.path.join("result", model_stem)
     out_dir = os.path.abspath(out_dir)
     os.makedirs(out_dir, exist_ok=True)
     report['paths']['out_dir'] = out_dir

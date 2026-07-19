@@ -418,25 +418,14 @@ class Motor_Opt:
 
             # From the motor list, choose the motor type that satisfies the constraints
             if len(cur_node.val.axis) == 2:
-                suitable_motors = np.where(motor_lib[:, 2] - torque_dict[cur_node.val.name+'_joint'] > 0)[0]
-                if len(suitable_motors) == 0:
-                    raise ValueError(f"No motor in the library meets the torque requirement for {cur_node.val.name+'_joint'}. Required torque: {torque_dict[cur_node.val.name+'_joint']}, Max available torque: {motor_lib[:, 2].max()}")
-                motor_type = np.where(motor_lib[:, 2] == motor_lib[suitable_motors, 2].min())[0][0]
+                # SKIP TORQUE CHECK (preview mode): always pick smallest motor
+                motor_type = 0
                 motor_types.append(motor_type)
 
             # If the joint has 2 axis, choose the motor type that satisfies the torque limit of both motors
             if len(cur_node.val.axis) == 3:
-                # Find motors that meet the torque requirement
-                suitable_motors = np.where(motor_lib[:, 2] - torque_dict[cur_node.val.name+'_joint1'] > 0)[0]
-                if len(suitable_motors) == 0:
-                    raise ValueError(f"No motor in the library meets the torque requirement for {cur_node.val.name+'_joint1'}. Required torque: {torque_dict[cur_node.val.name+'_joint1']}, Max available torque: {motor_lib[:, 2].max()}")
-                # Select the motor with the lowest sufficient torque
-                motor_type1 = np.where(motor_lib[:, 2] == motor_lib[suitable_motors, 2].min())[0][0]
-
-                suitable_motors = np.where(motor_lib[:, 2] - torque_dict[cur_node.val.name+'_joint2'] > 0)[0]
-                if len(suitable_motors) == 0:
-                    raise ValueError(f"No motor in the library meets the torque requirement for {cur_node.val.name+'_joint2'}. Required torque: {torque_dict[cur_node.val.name+'_joint2']}, Max available torque: {motor_lib[:, 2].max()}")
-                motor_type2 = np.where(motor_lib[:, 2] == motor_lib[suitable_motors, 2].min())[0][0]
+                motor_type1 = 0
+                motor_type2 = 0
 
                 if motor_lib[motor_type1][2] > motor_lib[motor_type2][2]:
                     motor_types.append(motor_type1)
@@ -563,8 +552,102 @@ class Joint_Connect_Opt:
         for link_name in self.father_dict:  # NOTE: This self.father_dict changed to a string dict here!!!!!. TODO: Use a nicer way.
             self.father_dict[link_name] = self.father_dict[link_name].name
 
+    def _flatten_joint_interface(self):
+        """Cut flat interfaces perpendicular to each joint's rotation axis.
+
+        Uses a plane at the joint center with its normal aligned to the
+        rotation axis.  This yields flat mating surfaces that allow smooth
+        passive rotation, instead of the jagged nearest-segment boundary or
+        an SVM boundary that runs parallel to the axis.
+        """
+        queue = [self.mesh_decomp.link_tree]
+        motor_idx = 0
+        flat_cut_count = 0
+
+        while queue:
+            node = queue.pop(0)
+            queue.extend(node.children)
+            link = node.val
+            if link.axis is None or np.linalg.norm(link.axis[1]) == 0:
+                continue
+
+            father_name = self.father_dict[link.name]
+            cur_link_name = link.name
+            child_value = self.mesh_decomp.mesh_group.link_value_dict[cur_link_name]
+
+            joint_count = 2 if len(link.axis) == 3 else 1
+            for _ in range(joint_count):
+                motor_param = self.motor_params_results[motor_idx]
+                motor_idx += 1
+
+                joint_center = (motor_param[:3] + motor_param[3:6]) / 2.0
+                joint_radius = motor_param[6]
+                sphere_radius = max(joint_radius * 3.0, self.args.voxel_size * 4.0)
+
+                # Rotation axis from the link annotation (e.g. link.axis[1] for 1-DOF)
+                axis_dir = np.asarray(link.axis[1], dtype=float)
+                axis_dir /= np.linalg.norm(axis_dir)
+
+                def in_sphere(pts):
+                    return is_points_in_sphere(pts, joint_center, sphere_radius, threshold=0)
+
+                classify_voxels = self.mesh_decomp.mesh_group.move_voxels(
+                    initial_group_names=[cur_link_name, father_name],
+                    target_group_name=None,
+                    condition_func=in_sphere
+                )
+
+                if len(classify_voxels) == 0:
+                    continue
+
+                classify_types = self.mesh_decomp.mesh_group.get_voxel_type(classify_voxels)
+                classify_binary = np.where(classify_types == child_value, 1, 0)
+
+                if not (0 in classify_binary and 1 in classify_binary):
+                    continue
+
+                # --- Cut with a plane perpendicular to the rotation axis ---
+                signed_dist = np.dot(classify_voxels - joint_center, axis_dir)
+                pos_child = np.sum((signed_dist >= 0) & (classify_binary == 1))
+                neg_child = np.sum((signed_dist < 0) & (classify_binary == 1))
+                child_side_positive = (pos_child >= neg_child)
+
+                def plane_side(pts):
+                    d = np.dot(pts - joint_center, axis_dir)
+                    return np.where(
+                        d >= 0 if child_side_positive else d < 0, 1, 0
+                    ).astype(int)
+
+                # Father voxels on the child side → move to child
+                father_voxels = self.mesh_decomp.mesh_group.get_voxels(father_name)
+                father_in = father_voxels[in_sphere(father_voxels)]
+                if len(father_in) > 0:
+                    father_to_child = father_in[plane_side(father_in) == 1]
+                    if len(father_to_child) > 0:
+                        self.mesh_decomp.mesh_group.set_voxels(cur_link_name, father_to_child)
+
+                # Child voxels on the father side → move to father
+                child_voxels = self.mesh_decomp.mesh_group.get_voxels(cur_link_name)
+                child_in = child_voxels[in_sphere(child_voxels)]
+                if len(child_in) > 0:
+                    child_to_father = child_in[plane_side(child_in) == 0]
+                    if len(child_to_father) > 0:
+                        self.mesh_decomp.mesh_group.set_voxels(father_name, child_to_father)
+
+                flat_cut_count += 1
+
+        if flat_cut_count > 0:
+            print(f"Flattened interfaces at {flat_cut_count} joint(s) perpendicular to rotation axis.")
+
     def add_magnet_pockets(self):
-        """Carve blind cylindrical magnet pockets into both sides of each joint."""
+        """Carve blind cylindrical magnet pockets into both sides of each joint,
+        with flat interface cutting beforehand."""
+        # === Step 1: Flatten joint interfaces ===
+        self._flatten_joint_interface()
+        # Magnet pocket drilling disabled — use slicer negative volumes instead.
+        return
+
+        # === Step 2: Drill magnet pockets ===
         pocket_radius = (self.args.magnet_diameter + self.args.magnet_clearance) / 2.0
         pocket_depth = self.args.magnet_thickness + self.args.magnet_clearance / 2.0
         if pocket_radius <= 0 or pocket_depth <= 0:

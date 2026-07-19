@@ -1156,9 +1156,11 @@ class Mesh_Loader:
         Scale the mesh, joint data, and link tree according to the expected x-axis length.
         """
 
-        # Get the scale factor
+        # Get the scale factor. Use the x-axis span (max - min), not 2 * max(x),
+        # so meshes whose origin is not centered on the body still end up with
+        # an x-axis length of exactly expected_x.
         vertices = np.asarray(self.mesh.mesh_o3d.vertices)
-        self.scale_factor = expected_x / 2 / (np.max(vertices[:,0]))
+        self.scale_factor = expected_x / (np.max(vertices[:,0]) - np.min(vertices[:,0]))
 
         # Scale the mesh
         self.scaled_mesh = self.mesh
