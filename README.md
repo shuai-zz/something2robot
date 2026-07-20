@@ -108,12 +108,19 @@ mkdir data
 # Motor mode (actuated joints with motor shells)
 uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --seed 42 --out-dir result/maneki_neko_motor
 
-# Magnet mode (flat interface + magnet pockets, revolute joint)
-uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --connector-mode magnet --magnet-diameter 6 --magnet-thickness 2 --out-dir result/maneki_neko_magnet
+# Coaxial tenon mode (turntable-style leaf joints)
+uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --connector-mode tenon --tenon-links arm --tenon-radius 3 --tenon-depth 4 --out-dir result/maneki_neko_tenon
 
-# None mode (plain split, fixed joint — for slicer manual finishing)
+# None mode (plain split only; it does NOT add a peg, pin, or hinge)
 uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --connector-mode none --out-dir result/maneki_neko_none
 ```
+
+> **注意：** `--connector-mode none` 只进行全局 voxel 分件并导出独立 STL。
+> 即使 `report.json` 显示 `success: true`，也只代表分件结果通过连通性和
+> watertight 检查，不代表已经生成可装配、可转动的关节结构。
+>
+> `tenon` 会自动生成公榫/母孔并按指定角度范围做运动碰撞检查；当前仅支持
+> 1-DOF、叶子 link 的同轴转盘关节，不适用于四足腿部的三节铰链。
 
 后处理脚本（对已拆分的 STL 加插销/轴承孔）：
 
@@ -124,6 +131,32 @@ uv run python script/pin_joint_demo.py \
   --mode pin --pin-diameter 3 \
   --out-dir result/<model>_pin
 ```
+
+### 四足动物与铰链关节
+
+四足动物的腿通常是 **hinge / knuckle（铰链）** 拓扑，而不是仙人掌、招财猫
+手臂使用的同轴转盘插销。二者不能直接互换：
+
+- `rotation_axis`：髋或膝实际转动所绕的轴，通常沿动物身体左右方向。
+- `cut_plane_normal`：身体与腿的分离方向，通常接近腿的长轴。
+- 铰链目标结构：父 link 两个外耳、子 link 一个中耳、三个孔同轴，并使用一根
+  独立圆柱销连接。
+
+当前 `run.py` **尚未自动生成三片式铰链和独立穿销**。推荐先用 `none` 模式
+生成并验证干净分件，再进行铰链后处理；不要把同轴 tenon 脚本直接套到狗腿上。
+
+已验证的四足分件基线：
+
+```bash
+uv run python run.py \
+  --model n02085782_28_neutral_res_e300_smoothed_scaled \
+  --expected-x 100 --voxel-size 0.5 --seed 42 \
+  --max-trial-round 1 --connector-mode none \
+  --out-dir result/n02085782_28_quadruped_baseline
+```
+
+该模型会生成 `BODY`、四条上腿和四条下腿，共 9 个 watertight STL。该命令
+在现有测试机器上约耗时 16.5 分钟；输出仍然只是铰链开发基线，没有插销。
 
 常用参数：
 
@@ -165,8 +198,8 @@ To start the auto design, you can use the simplified `run.py` entry point:
 # Motor mode (actuated joints)
 uv run python run.py --model <model_name> --expected-x <mm> --voxel-size <mm>
 
-# Magnet mode (passive joints with flat interfaces + magnet pockets)
-uv run python run.py --model <model_name> --expected-x <mm> --voxel-size <mm> --connector-mode magnet --magnet-diameter 6 --magnet-thickness 2
+# Coaxial tenon mode (passive turntable-style leaf joints)
+uv run python run.py --model <model_name> --expected-x <mm> --voxel-size <mm> --connector-mode tenon --tenon-links <leaf_link>
 ```
 
 Or use the full script directly:
@@ -179,8 +212,9 @@ python script/auto_design.py --stl_mesh_path <path_to_stl_file> --joint_pkl_path
 | Mode | Joint type | Status | Description |
 |------|-----------|--------|-------------|
 | `motor` (default) | `revolute` | ✅ stable | Motor shells carved into links, GA-optimized |
-| `magnet` | `revolute` | ✅ stable | Flat interface + magnet pockets for passive joints |
-| `none` | `fixed` | ✅ stable | Plain split, no interface modification (debugging) |
+| `tenon` | `revolute` | ✅ tested | Auto-fitted coaxial male tenon/socket for 1-DOF leaf turntable joints; includes motion validation |
+| `magnet` | `revolute` | ⚠️ incomplete | Core path currently flattens the interface but does not carve the pockets; Blender pocket script remains standalone |
+| `none` | `fixed` | ✅ stable | Plain split only; no peg, pin, socket, or hinge (debugging / connector-development baseline) |
 | `pin` | `revolute` | 🔧 planned | Flat interface + through‑hole for metal pin / filament rod |
 | `bearing` | `revolute` | 🔧 planned | Flat interface + bearing pocket + pin through‑hole |
 
@@ -221,4 +255,3 @@ Any commercial use, including but not limited to use in commercial products,
 services, or for-profit research, is strictly prohibited without explicit permission.
 
 If you use this work in your research, please cite our paper.
-

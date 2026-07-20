@@ -6,6 +6,7 @@ import shutil
 import sys
 
 import numpy as np
+import open3d as o3d
 import trimesh
 
 
@@ -24,18 +25,59 @@ def rotation_from_z(direction):
     return trimesh.geometry.align_vectors([0, 0, 1], direction)
 
 
-def subtract_pocket(mesh, annotated_opening, shared_opening, axis, radius, depth):
-    vertices = np.asarray(mesh.vertices)
-    nearest = vertices[np.argmin(np.linalg.norm(vertices - annotated_opening, axis=1))]
-    delta = nearest - shared_opening
-    axial = float(np.dot(delta, axis))
-    radial = float(np.linalg.norm(delta - axial * axis))
-    opening = shared_opening if abs(axial) <= depth + 0.5 and radial <= radius else nearest
+def locate_pocket_opening(mesh, annotated_opening, axis):
+    """Ray-cast both ways along the joint axis to find the local interface.
 
-    inward_sign = np.sign(np.dot(nearest - opening, axis))
-    if inward_sign == 0:
-        inward_sign = np.sign(np.dot(mesh.centroid - opening, axis)) or 1.0
-    inward = axis * inward_sign
+    The closest hit is the interface surface; the pocket points into the part,
+    away from that hit.  The opposite hit also gives a conservative axial wall
+    thickness at the pocket centre.
+    """
+    legacy = o3d.geometry.TriangleMesh(
+        o3d.utility.Vector3dVector(np.asarray(mesh.vertices)),
+        o3d.utility.Vector3iVector(np.asarray(mesh.faces)),
+    )
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(legacy))
+    directions = np.vstack((axis, -axis)).astype(np.float32)
+    origins = np.repeat(np.asarray(annotated_opening, dtype=np.float32)[None, :], 2, axis=0)
+    rays = np.hstack((origins, directions))
+    distances = scene.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy()
+    if not np.all(np.isfinite(distances)):
+        # The annotation may sit just outside one side of the voxelized link.
+        # Cast inward from well outside both ends of the mesh instead; this
+        # recovers the two boundary points along the same joint-axis line.
+        span = max(float(np.linalg.norm(mesh.extents)) * 2.0, 1.0)
+        origins = np.vstack((
+            np.asarray(annotated_opening, dtype=float) - axis * span,
+            np.asarray(annotated_opening, dtype=float) + axis * span,
+        )).astype(np.float32)
+        directions = np.vstack((axis, -axis)).astype(np.float32)
+        rays = np.hstack((origins, directions))
+        distances = scene.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy()
+        if not np.all(np.isfinite(distances)):
+            raise RuntimeError("Could not find both part boundaries along the annotated joint axis")
+        hit_points = origins + directions * distances[:, None]
+        hit_offsets = np.linalg.norm(
+            hit_points - np.asarray(annotated_opening, dtype=float), axis=1
+        )
+        interface_idx = int(np.argmin(hit_offsets))
+        opening = hit_points[interface_idx].astype(float)
+        inward = directions[interface_idx].astype(float)
+        axial_thickness = float(np.linalg.norm(hit_points[0] - hit_points[1]))
+        return opening, inward, axial_thickness, hit_offsets.tolist()
+
+    interface_idx = int(np.argmin(distances))
+    outward = directions[interface_idx].astype(float)
+    opening = np.asarray(annotated_opening, dtype=float) + outward * float(distances[interface_idx])
+    inward = -outward
+    axial_thickness = float(distances.sum())
+    return opening, inward, axial_thickness, distances.tolist()
+
+
+def subtract_pocket(mesh, annotated_opening, axis, radius, depth):
+    opening, inward, axial_thickness, ray_distances = locate_pocket_opening(
+        mesh, annotated_opening, axis
+    )
 
     # Extend 0.1 mm outside the surface so the Boolean has an unambiguous cut.
     overlap = 0.1
@@ -62,6 +104,9 @@ def subtract_pocket(mesh, annotated_opening, shared_opening, axis, radius, depth
         "annotated_opening_mm": annotated_opening.tolist(),
         "actual_opening_mm": opening.tolist(),
         "inward_axis": inward.tolist(),
+        "axis_ray_distances_mm": ray_distances,
+        "available_axial_thickness_mm": axial_thickness,
+        "remaining_axial_wall_mm": axial_thickness - depth,
         "removed_volume_mm3": before_volume - abs(float(result.volume)),
         "components_before_cleanup": len(components),
         "cleaned_small_fragments": cleaned_small_fragments,
@@ -76,6 +121,12 @@ def main():
     parser.add_argument("--diameter", type=float, default=6.0)
     parser.add_argument("--thickness", type=float, default=2.0)
     parser.add_argument("--clearance", type=float, default=0.2)
+    parser.add_argument(
+        "--pocket-direction", choices=("rotation-axis", "link-segment"),
+        default="rotation-axis",
+        help=("Pocket axis: annotated rotation axis, or the segment from the "
+              "shared joint toward the child link's other joints"),
+    )
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -86,7 +137,13 @@ def main():
     robot_result = pickle.load(open(args.robot_result, "rb"))
     radius = (args.diameter + args.clearance) / 2.0
     depth = args.thickness + args.clearance / 2.0
-    report = {"diameter_mm": radius * 2, "depth_mm": depth, "engine": "blender", "pockets": []}
+    report = {
+        "diameter_mm": radius * 2,
+        "depth_mm": depth,
+        "engine": "blender",
+        "pocket_direction": args.pocket_direction,
+        "pockets": [],
+    }
 
     queue = [robot_result.link_tree]
     result_idx = 0
@@ -101,21 +158,29 @@ def main():
             annotated_opening = (motor_result[:3] + motor_result[3:6]) * 5.0
             axis = motor_result[3:6] - motor_result[:3]
             axis /= np.linalg.norm(axis)
+            if args.pocket_direction == "link-segment":
+                # Link annotations are in the core's centimetre units here.
+                # The shared joint is at annotated_opening; all other joints
+                # point along the child link, away from the parent/head.
+                joint_points = np.asarray(list(link.joints.values()), dtype=float) * 10.0
+                other_points = joint_points[
+                    np.linalg.norm(joint_points - annotated_opening, axis=1) > 1e-4
+                ]
+                if len(other_points) == 0:
+                    raise RuntimeError(
+                        f"Cannot derive link-segment pocket direction for {link.name}"
+                    )
+                axis = other_points.mean(axis=0) - annotated_opening
+                axis /= np.linalg.norm(axis)
             father_name = robot_result.father_link_dict[link.name]
             part_names = (father_name, link.name)
             meshes = {
                 name: trimesh.load_mesh(os.path.join(args.out_dir, name + ".stl"), process=False)
                 for name in part_names
             }
-            nearest = [
-                np.asarray(mesh.vertices)[np.argmin(np.linalg.norm(np.asarray(mesh.vertices) - annotated_opening, axis=1))]
-                for mesh in meshes.values()
-            ]
-            shared_opening = np.mean(nearest, axis=0)
-
             for part_name, mesh in meshes.items():
                 result, details = subtract_pocket(
-                    mesh, annotated_opening, shared_opening, axis, radius, depth
+                    mesh, annotated_opening, axis, radius, depth
                 )
                 result.export(os.path.join(args.out_dir, part_name + ".stl"))
                 details.update({

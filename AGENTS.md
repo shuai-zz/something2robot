@@ -8,7 +8,7 @@ Takes a 3D mesh (`.stl`) plus joint annotations (`_joints.pkl`) and produces:
 
 - A URDF with movable joints
 - Printable STL parts in **millimeters**
-- Joint interface geometry (motor shells or magnet pockets)
+- Joint interface geometry (motor shells or coaxial tenons; magnet pockets remain experimental)
 - Motor placement visualization (motor mode only)
 - A `report.json` summary
 
@@ -25,8 +25,8 @@ Example:
 # Motor mode (actuated joints with motor shells)
 uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --seed 42 --out-dir result/maneki_neko_motor
 
-# Magnet mode (passive joints with flat interface + magnet pockets)
-uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --connector-mode magnet --magnet-diameter 6 --magnet-thickness 2 --out-dir result/maneki_neko_magnet
+# Coaxial tenon mode (passive 1-DOF leaf turntable joints)
+uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --connector-mode tenon --tenon-links arm --tenon-radius 3 --tenon-depth 4 --out-dir result/maneki_neko_tenon
 ```
 
 ## Environment
@@ -48,7 +48,7 @@ uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --conn
 | `--max-trial-round` | 8 | How many times auto_design retries on failure |
 | `--repair` | false | Keep only largest connected component for broken links |
 | `--skip-motors` | false | Skip motor visualization export |
-| `--connector-mode` | `motor` | Joint interface type: `motor`, `magnet`, or `none` |
+| `--connector-mode` | `motor` | Joint interface type: `motor`, `tenon`, experimental `magnet`, or `none` |
 | `--magnet-diameter` | 6.0 | Magnet diameter in mm (magnet mode only) |
 | `--magnet-thickness` | 2.0 | Magnet pocket depth in mm (magnet mode only) |
 | `--magnet-clearance` | 0.2 | Added diametral pocket clearance in mm (magnet mode only) |
@@ -59,8 +59,9 @@ uv run python run.py --model maneki_neko --expected-x 50 --voxel-size 0.5 --conn
 | Mode | Joint type | Status | Geometry | Use case |
 |------|-----------|--------|----------|----------|
 | `motor` | `revolute` | ✅ stable | Motor shells + cylindrical cavity | Actuated robots with servos |
-| `magnet` | `revolute` | ✅ stable | Flat interface ⟂ axis + magnet pockets | Passive turntable joints |
-| `none` | `fixed` | ✅ stable | Plain split, jagged boundary | Debugging / raw decomposition |
+| `tenon` | `revolute` | ✅ tested | Coaxial male tenon/socket + auto-fit motion relief | 1-DOF leaf turntable joints |
+| `magnet` | `revolute` | ⚠️ incomplete | Flat interface only in core; pocket carving is not integrated | Research only |
+| `none` | `fixed` | ✅ stable | Plain split, jagged boundary; **no connector geometry** | Debugging / raw decomposition / connector-development baseline |
 | `pin` | `revolute` | 🔧 planned | Flat interface + through‑hole for metal pin | Passive hinge joints (cheapest) |
 | `bearing` | `revolute` | 🔧 planned | Flat interface + bearing pocket + through‑hole | Passive hinge joints (smoothest) |
 
@@ -92,6 +93,23 @@ model's articulation style and desired mechanical properties.
 The **current flattening code assumes turntable topology** (plane ⟂ rotation
 axis).  This is correct for maneki_neko but wrong for bulldog legs.  See
 "Joint interface flattening" below for the planned fix.
+
+Do not use the experimental coaxial tenon workflow for a hinge merely because
+its cylinder is aligned with the annotated rotation axis.  A printable hinge
+needs two independent directions: the rotation/pin axis and the link separation
+direction.  For a quadruped leg these are normally close to perpendicular.
+
+The intended three-knuckle layout is:
+
+```
+along rotation axis:  parent ear | child ear | parent ear
+through all ears:                 independent round pin
+```
+
+The parent ears must be unioned to the parent link, the center ear to the child
+link, and coaxial clearance holes must be subtracted from all ears.  The pin is
+a separate printable STL (or metal rod / filament).  Motion validation must
+rotate the complete child subtree, not just the connector primitive.
 
 ### Joint type comparison
 
@@ -174,6 +192,12 @@ All results go under `result/` in the project root. Each run creates a subdirect
 - `exit_code: 3` → mesh not watertight; use `--repair` to keep largest component.
 - `exit_code: 555` → exception during auto_design; check `notes` in `report.json`.
 
+For `--connector-mode none`, `success: true` has a narrower meaning: the raw
+link decomposition is connected and watertight.  It does **not** mean that a
+peg, socket, pin, hinge, retention feature, or motion clearance exists.  Do not
+describe a successful `none` run as an assembled or print-ready articulated
+joint.
+
 ## Minimal MVP workflow
 
 1. Pick or add a model with joints in `auto_design/model/given_models/`.
@@ -191,7 +215,7 @@ All results go under `result/` in the project root. Each run creates a subdirect
 | Process hangs in destruction check | Use larger `--voxel-size` or `--max-trial-round 1` to avoid repeated checks |
 | UI does not open for joint annotation | Make sure you are on macOS with a display; do not pass `--disable_joint_setting_ui` |
 | Head/body parts misassigned to wrong link | Usually caused by the nearest-segment rule when a link passes close to another body part (e.g. maneki_neko's raised arm hugs the face). Disconnected misassigned voxels are now reassigned to the closest other link instead of being deleted (see `mesh_decomp.py`). If the main cluster itself is wrong, adjust joint positions in the UI. |
-| Magnet pockets look conical / interface not flat | Use `--connector-mode magnet` for flat mating surfaces |
+| Magnet mode has no actual pockets | Expected current limitation: core only flattens; the Blender pocket script is standalone |
 
 ## Removed / unavailable (do not use)
 
@@ -204,7 +228,7 @@ This repo is a stripped-down fork of the upstream `anything2robot` project. The 
 | `script/fill_in_metamaterial_for_urdf.py` | **Broken** (imports the removed `metamaterial_filling` package). |
 | `script/quadruped_auto_design_test.py`, `script/quadruped_success_sample_fea.py` | **Broken** (import removed modules `quadruped_pose_to_pkl` / `metamaterial_filling`). Legacy from the quadruped era. |
 | `script/result_analysis.py`, `script/mesh_rotation.py` | Legacy standalone tools, **not part of the `run.py` pipeline** and unmaintained. Use at your own risk. |
-| `script/boolean_magnet_pockets.py` | Standalone tool, **not wired into `run.py`**. Requires a Blender installation (`engine="blender"`), which is not declared in `pyproject.toml`. Magnet pockets in the normal pipeline are made by `--connector-mode magnet` (voxel-based), not by this script. |
+| `script/boolean_magnet_pockets.py` | Standalone experimental tool, **not wired into `run.py`**. Requires Blender. The core `magnet` mode currently flattens interfaces but does not carve pockets. |
 
 ## Files an agent should know about
 
@@ -223,6 +247,30 @@ This repo is a stripped-down fork of the upstream `anything2robot` project. The 
 | `script/check_and_repair_links.py` | Checks link STL connectivity |
 | `script/export_motor_visualization.py` | Exports motor placement STLs |
 | `auto_design/model/given_models/` | Where input STL + joints pkl live |
+
+## Validated quadruped hinge baseline
+
+The following model has complete annotations for `BODY`, four upper legs, and
+four lower legs (9 links total):
+
+```bash
+uv run python run.py \
+  --model n02085782_28_neutral_res_e300_smoothed_scaled \
+  --expected-x 100 --voxel-size 0.5 --seed 42 \
+  --max-trial-round 1 --connector-mode none \
+  --out-dir result/n02085782_28_quadruped_baseline
+```
+
+Observed result on 2026-07-20: exit code 0; all 9 `parts_mm` STLs were
+watertight and single-component.  The run processed about 2.39 million occupied
+voxels and took about 16.5 minutes on the test Mac.  This output is deliberately
+a **clean decomposition baseline only** and contains no pins or hinge knuckles.
+
+The hip and knee annotations use a left-right X rotation axis.  Therefore the
+next connector stage must generate a three-knuckle hinge along X while deriving
+the leg/body separation direction independently (joint-to-joint segment,
+local parent/child centroids, or an explicit `cut_plane_normal`).  Do not reuse
+the Cactus/maneki-neko coaxial turntable tenon as the final quadruped connector.
 
 ## Future Integration Roadmap
 

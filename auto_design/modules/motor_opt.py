@@ -584,8 +584,21 @@ class Joint_Connect_Opt:
                 joint_radius = motor_param[6]
                 sphere_radius = max(joint_radius * 3.0, self.args.voxel_size * 4.0)
 
-                # Rotation axis from the link annotation (e.g. link.axis[1] for 1-DOF)
-                axis_dir = np.asarray(link.axis[1], dtype=float)
+                # Turntable joints use the rotation axis as the interface
+                # normal.  For appendages such as ears/legs, the joint-to-link
+                # segment provides an independent separation direction.
+                if getattr(self.args, 'cut_plane_direction', 'rotation-axis') == 'link-segment':
+                    joint_points = np.asarray(list(link.joints.values()), dtype=float)
+                    other_points = joint_points[
+                        np.linalg.norm(joint_points - joint_center, axis=1) > 1e-6
+                    ]
+                    if len(other_points) == 0:
+                        raise RuntimeError(
+                            f"Cannot derive link-segment cut direction for {link.name}"
+                        )
+                    axis_dir = other_points.mean(axis=0) - joint_center
+                else:
+                    axis_dir = np.asarray(link.axis[1], dtype=float)
                 axis_dir /= np.linalg.norm(axis_dir)
 
                 def in_sphere(pts):
@@ -637,7 +650,8 @@ class Joint_Connect_Opt:
                 flat_cut_count += 1
 
         if flat_cut_count > 0:
-            print(f"Flattened interfaces at {flat_cut_count} joint(s) perpendicular to rotation axis.")
+            direction_mode = getattr(self.args, 'cut_plane_direction', 'rotation-axis')
+            print(f"Flattened interfaces at {flat_cut_count} joint(s) using {direction_mode} normals.")
 
     def add_magnet_pockets(self):
         """Carve blind cylindrical magnet pockets into both sides of each joint,

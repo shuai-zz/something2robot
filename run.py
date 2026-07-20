@@ -5,6 +5,8 @@ import json
 import time
 import shutil
 import re
+import pickle
+import subprocess
 
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
@@ -181,7 +183,8 @@ class AutoDesignArgs:
 def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                genetic_generation=5, max_trial_round=8, voxel_density=1.2e-4,
                connector_mode='motor', magnet_diameter=6.0,
-               magnet_thickness=2.0, magnet_clearance=0.2):
+               magnet_thickness=2.0, magnet_clearance=0.2,
+               cut_plane_direction='rotation-axis'):
     args = AutoDesignArgs()
     args.stl_mesh_path = os.path.abspath(stl_path)
     args.joint_pkl_path = os.path.abspath(joints_path)
@@ -205,7 +208,115 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.magnet_diameter = magnet_diameter / 10.0
     args.magnet_thickness = magnet_thickness / 10.0
     args.magnet_clearance = magnet_clearance / 10.0
+    args.cut_plane_direction = cut_plane_direction
     return args
+
+
+def _run_tenon_postprocess(args_cli, report, round_folder, parts_mm_folder, out_dir):
+    """Add fitted coaxial tenons to passive, single-DOF leaf joints."""
+    robot_result_path = os.path.join(round_folder, 'robot_result.pkl')
+    if not os.path.isfile(robot_result_path):
+        raise FileNotFoundError(f"robot_result.pkl not found: {robot_result_path}")
+
+    with open(robot_result_path, 'rb') as handle:
+        robot_result = pickle.load(handle)
+
+    requested_links = None
+    if args_cli.tenon_links:
+        requested_links = {name.strip() for name in args_cli.tenon_links.split(',') if name.strip()}
+
+    joints = []
+    queue = [robot_result.link_tree]
+    while queue:
+        node = queue.pop(0)
+        queue.extend(node.children)
+        link = node.val
+        if link.axis is None or len(link.axis) < 2 or not any(link.axis[1]):
+            continue
+        if requested_links is not None and link.name not in requested_links:
+            continue
+        if len(link.axis) != 2:
+            raise ValueError(f"Tenon mode supports 1-DOF joints only: {link.name}")
+        if node.children:
+            raise ValueError(
+                f"Tenon motion validation currently supports leaf links only: {link.name}"
+            )
+        parent = robot_result.father_link_dict[link.name]
+        parent_name = parent if isinstance(parent, str) else parent.name
+        joints.append((parent_name, link.name))
+
+    if requested_links is not None:
+        found = {link for _, link in joints}
+        missing = requested_links - found
+        if missing:
+            raise ValueError("Requested tenon links are unavailable or unsupported: " + ', '.join(sorted(missing)))
+    if not joints:
+        raise ValueError("No supported leaf joints found for tenon generation")
+
+    tenon_root = os.path.join(out_dir, 'tenon')
+    tenon_parts = os.path.join(tenon_root, 'parts_mm')
+    os.makedirs(tenon_parts, exist_ok=True)
+    for filename in os.listdir(parts_mm_folder):
+        if filename.lower().endswith('.stl'):
+            shutil.copy2(os.path.join(parts_mm_folder, filename), os.path.join(tenon_parts, filename))
+
+    joint_reports = []
+    for parent_name, link_name in joints:
+        joint_dir = os.path.join(tenon_root, 'joints', link_name)
+        command = [
+            sys.executable, os.path.join(project_root, 'script', 'auto_fit_joint.py'),
+            '--model', report['model_stem'], '--link', link_name,
+            '--parent-link', parent_name, '--parts-mm', tenon_parts,
+            '--expected-x', str(args_cli.expected_x),
+            '--angle-min', str(args_cli.tenon_angle_min),
+            '--angle-max', str(args_cli.tenon_angle_max),
+            '--angle-step', str(args_cli.tenon_angle_step),
+            '--max-iterations', str(args_cli.tenon_max_iterations),
+            '--tenon-radius', str(args_cli.tenon_radius),
+            '--tenon-depth', str(args_cli.tenon_depth),
+            '--tenon-root-overlap', str(args_cli.tenon_root_overlap),
+            '--clearance', str(args_cli.tenon_clearance),
+            '--collar-thickness', str(args_cli.tenon_collar_thickness),
+            '--out-dir', joint_dir,
+        ]
+        completed = subprocess.run(command, cwd=project_root)
+        auto_fit_report_path = os.path.join(joint_dir, 'auto_fit_report.json')
+        if not os.path.isfile(auto_fit_report_path):
+            raise RuntimeError(f"Tenon auto-fit produced no report for {link_name}")
+        with open(auto_fit_report_path, 'r', encoding='utf-8') as handle:
+            joint_report = json.load(handle)
+        joint_reports.append(joint_report)
+        if completed.returncode != 0 or not joint_report.get('success'):
+            raise RuntimeError(f"Tenon auto-fit failed for {link_name}; see {auto_fit_report_path}")
+
+        final_dir = joint_report['final_directory']
+        generated = {
+            parent_name: os.path.join(final_dir, f'{parent_name}_local_voxel_tenon.stl'),
+            link_name: os.path.join(final_dir, f'{link_name}_local_voxel_tenon.stl'),
+        }
+        for part_name, source in generated.items():
+            if not os.path.isfile(source):
+                raise FileNotFoundError(f"Expected fitted tenon part not found: {source}")
+            shutil.copy2(source, os.path.join(tenon_parts, part_name + '.stl'))
+
+    checks = check_urdf_folder_links(tenon_parts, repair=False)
+    invalid = [row for row in checks if not row['watertight'] or row['components'] != 1]
+    if invalid:
+        raise RuntimeError(f"Final tenon parts failed topology validation: {invalid}")
+
+    summary = {
+        'mode': 'tenon',
+        'scope': 'coaxial turntable tenons on 1-DOF leaf links',
+        'parts_mm_folder': tenon_parts,
+        'processed_joints': [{'parent': parent, 'child': child} for parent, child in joints],
+        'joint_reports': joint_reports,
+        'link_checks': checks,
+    }
+    os.makedirs(tenon_root, exist_ok=True)
+    with open(os.path.join(tenon_root, 'report.json'), 'w', encoding='utf-8') as handle:
+        json.dump(summary, handle, indent=2)
+    report['tenon'] = summary
+    report['paths']['tenon_parts_mm_folder'] = tenon_parts
 
 
 def main():
@@ -228,18 +339,32 @@ def main():
                         help='Repair disconnected STL links by keeping largest component')
     parser.add_argument('--skip-motors', action='store_true',
                         help='Skip motor visualization export')
-    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'none'), default='motor',
-                        help='Joint interface: existing motor shell, magnet pockets, or plain split (default: motor)')
+    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'tenon', 'none'), default='motor',
+                        help='Joint interface: motor, experimental magnet, fitted coaxial tenon, or plain split')
     parser.add_argument('--magnet-diameter', type=float, default=6.0,
                         help='Magnet diameter in mm, used with --connector-mode magnet (default: 6.0)')
     parser.add_argument('--magnet-thickness', type=float, default=2.0,
                         help='Magnet thickness/pocket depth in mm (default: 2.0)')
     parser.add_argument('--magnet-clearance', type=float, default=0.2,
                         help='Added diametral pocket clearance in mm (default: 0.2)')
+    parser.add_argument('--cut-plane-direction', choices=('rotation-axis', 'link-segment'),
+                        default='rotation-axis',
+                        help='Passive-joint interface normal (default: rotation-axis)')
     parser.add_argument('--max-trial-round', type=int, default=8,
                         help='Maximum auto-design trial rounds (default: 8)')
     parser.add_argument('--voxel-density', type=float, default=1.2e-4,
                         help='Voxel density in kg/cm^3 (default: 1.2e-4). Lower value reduces mass and motor torque requirements.')
+    parser.add_argument('--tenon-links', default=None,
+                        help='Comma-separated leaf links to process in tenon mode (default: all supported leaves)')
+    parser.add_argument('--tenon-radius', type=float, default=3.0, help='Tenon radius in mm')
+    parser.add_argument('--tenon-depth', type=float, default=4.0, help='Tenon insertion depth in mm')
+    parser.add_argument('--tenon-root-overlap', type=float, default=3.0, help='Tenon overlap into child in mm')
+    parser.add_argument('--tenon-clearance', type=float, default=0.3, help='Radial tenon clearance in mm')
+    parser.add_argument('--tenon-collar-thickness', type=float, default=1.5, help='Socket collar thickness in mm')
+    parser.add_argument('--tenon-angle-min', type=int, default=-45)
+    parser.add_argument('--tenon-angle-max', type=int, default=45)
+    parser.add_argument('--tenon-angle-step', type=int, default=5)
+    parser.add_argument('--tenon-max-iterations', type=int, default=8)
     args_cli = parser.parse_args()
 
     if args_cli.connector_mode == 'magnet':
@@ -247,6 +372,24 @@ def main():
             parser.error('--magnet-diameter and --magnet-thickness must be positive')
         if args_cli.magnet_clearance < 0:
             parser.error('--magnet-clearance cannot be negative')
+    if args_cli.connector_mode == 'tenon':
+        positive = {
+            '--tenon-radius': args_cli.tenon_radius,
+            '--tenon-depth': args_cli.tenon_depth,
+            '--tenon-root-overlap': args_cli.tenon_root_overlap,
+            '--tenon-collar-thickness': args_cli.tenon_collar_thickness,
+            '--tenon-angle-step': args_cli.tenon_angle_step,
+            '--tenon-max-iterations': args_cli.tenon_max_iterations,
+        }
+        invalid = [name for name, value in positive.items() if value <= 0]
+        if invalid:
+            parser.error(', '.join(invalid) + ' must be positive')
+        if args_cli.tenon_clearance < 0:
+            parser.error('--tenon-clearance cannot be negative')
+        if args_cli.tenon_angle_min > 0 or args_cli.tenon_angle_max < 0:
+            parser.error('tenon motion range must include 0 degrees')
+        if args_cli.tenon_angle_min >= args_cli.tenon_angle_max:
+            parser.error('--tenon-angle-min must be less than --tenon-angle-max')
 
     start_time = time.time()
     report = {
@@ -263,6 +406,18 @@ def main():
         'magnet_diameter_mm': args_cli.magnet_diameter,
         'magnet_thickness_mm': args_cli.magnet_thickness,
         'magnet_clearance_mm': args_cli.magnet_clearance,
+        'cut_plane_direction': args_cli.cut_plane_direction,
+        'tenon_parameters': {
+            'links': args_cli.tenon_links,
+            'radius_mm': args_cli.tenon_radius,
+            'depth_mm': args_cli.tenon_depth,
+            'root_overlap_mm': args_cli.tenon_root_overlap,
+            'radial_clearance_mm': args_cli.tenon_clearance,
+            'collar_thickness_mm': args_cli.tenon_collar_thickness,
+            'angle_range_degrees': [args_cli.tenon_angle_min, args_cli.tenon_angle_max],
+            'angle_step_degrees': args_cli.tenon_angle_step,
+            'max_iterations': args_cli.tenon_max_iterations,
+        },
         'project_root': project_root,
         'timings': {},
         'paths': {},
@@ -314,6 +469,7 @@ def main():
         magnet_diameter=args_cli.magnet_diameter,
         magnet_thickness=args_cli.magnet_thickness,
         magnet_clearance=args_cli.magnet_clearance,
+        cut_plane_direction=args_cli.cut_plane_direction,
     )
 
     design_start = time.time()
@@ -394,6 +550,17 @@ def main():
         report['notes'].append(f"Motor export disabled for connector mode '{args_cli.connector_mode}'.")
     else:
         report['notes'].append("Motor export skipped by --skip-motors.")
+
+    if args_cli.connector_mode == 'tenon':
+        tenon_start = time.time()
+        try:
+            _run_tenon_postprocess(
+                args_cli, report, round_folder, parts_mm_folder, out_dir
+            )
+        except Exception as e:
+            report['success'] = False
+            report['notes'].append(f"Tenon post-process failed: {e}")
+        report['timings']['tenon_seconds'] = time.time() - tenon_start
 
     report['timings']['total_seconds'] = time.time() - start_time
     _write_report(report, out_dir)
