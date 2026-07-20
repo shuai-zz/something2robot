@@ -133,11 +133,13 @@ class RobotOptResult:
                 self.link_dict[current_link.name] = LinkResult()
                 tenon_pos = (motor_child_side + self.tenon_height * motor_direct) / 100.0
                 tenon_direct = -motor_direct
-                self.link_dict[current_link.name].add_tenon_pos(np.hstack((tenon_pos, tenon_direct)), 'child', motor_idx) 
+                if getattr(self.args, 'connector_mode', 'motor') == 'motor':
+                    self.link_dict[current_link.name].add_tenon_pos(np.hstack((tenon_pos, tenon_direct)), 'child', motor_idx)
 
                 tenon_pos_father = (motor_father_side - self.tenon_height * motor_direct) / 100.0
                 tenon_direct_father = motor_direct
-                self.link_dict[self.father_link_dict[current_link.name]].add_tenon_pos(np.hstack((tenon_pos_father, tenon_direct_father)), 'father', motor_idx)
+                if getattr(self.args, 'connector_mode', 'motor') == 'motor':
+                    self.link_dict[self.father_link_dict[current_link.name]].add_tenon_pos(np.hstack((tenon_pos_father, tenon_direct_father)), 'father', motor_idx)
                 cur_idx += 1
             
             elif len(current_link.axis) == 3:
@@ -157,11 +159,13 @@ class RobotOptResult:
                 self.link_dict[current_link.name] = LinkResult()
                 tenon_pos = (motor_child_side + self.tenon_height * motor_direct1) / 100.0
                 tenon_direct = -motor_direct1
-                self.link_dict[current_link.name].add_tenon_pos(np.hstack((tenon_pos, tenon_direct)), 'child', motor_idx1) 
+                if getattr(self.args, 'connector_mode', 'motor') == 'motor':
+                    self.link_dict[current_link.name].add_tenon_pos(np.hstack((tenon_pos, tenon_direct)), 'child', motor_idx1)
 
                 tenon_pos_father = (motor_father_side - self.tenon_height * motor_direct2) / 100.0
                 tenon_direct_father = -motor_direct2
-                self.link_dict[self.father_link_dict[current_link.name]].add_tenon_pos(np.hstack((tenon_pos_father, tenon_direct_father)), 'father', motor_idx2)
+                if getattr(self.args, 'connector_mode', 'motor') == 'motor':
+                    self.link_dict[self.father_link_dict[current_link.name]].add_tenon_pos(np.hstack((tenon_pos_father, tenon_direct_father)), 'father', motor_idx2)
                 cur_idx += 2
         
         #check the tenon position with mesh
@@ -213,7 +217,7 @@ class RobotOptResult:
         # o3d.visualization.draw_geometries([mesh] + tenon_vector_o3d)
         
         # 2. Add force and torque information
-        pkg_dir = './..'
+        pkg_dir = '.'
         model, collision_model, visual_model = pin.buildModelsFromUrdf(self.urdf_dir, pkg_dir)
         data = model.createData()
         max_torque = np.zeros((model.nv))
@@ -624,9 +628,9 @@ class InterferenceRemoval:
             # Keep the string after the package name
             written_in_dir = dir[dir.index(package_name) + len(package_name):]
         else:
-            written_in_dir = dir
+            written_in_dir = os.path.relpath(dir, '.') + '/'
 
-        if written_in_dir[0] == '/':
+        if written_in_dir.startswith('/'):
             written_in_dir = written_in_dir[1:]
 
         while node_queue:
@@ -653,7 +657,7 @@ class InterferenceRemoval:
                 inetial_matrix, CoM = calculate_inertia_tensor(self.mesh_group.get_voxels("BODY") / 100.0, part_mass, np.eye(4))
                 link_inertial = {
                     "origin": {"xyz": ' '.join(map(str, CoM)), "rpy": '0 0 0'},
-                    "mass": str(self.mesh_group.get_voxels("BODY").shape[0] * self.args.voxel_density),
+                    "mass": str(part_mass),
                     "inertia": {"ixx": inetial_matrix[0, 0], "iyy": inetial_matrix[1, 1], "izz": inetial_matrix[2, 2], "ixy": inetial_matrix[0, 1], "ixz": inetial_matrix[0, 2], "iyz": inetial_matrix[1, 2]}
                 }
                 write_link(urdf_file=urdf_file, link_name="BODY", visual=link_visual, collision=link_collision, inertial=link_inertial)
@@ -689,7 +693,7 @@ class InterferenceRemoval:
             inetial_matrix, CoM = calculate_inertia_tensor(self.mesh_group.get_voxels(cur_link.name) / 100.0, part_mass, np.eye(4))
             link_inertial = {
                 "origin": {"xyz": ' '.join(map(str, CoM + (rel_pos - motor_pos) / 100.0)), "rpy": '0 0 0'},
-                "mass": str(self.mesh_group.get_voxels(cur_link.name).shape[0] * self.args.voxel_density),
+                "mass": str(part_mass),
                 "inertia": {"ixx": inetial_matrix[0, 0], "iyy": inetial_matrix[1, 1], "izz": inetial_matrix[2, 2], "ixy": inetial_matrix[0, 1], "ixz": inetial_matrix[0, 2], "iyz": inetial_matrix[1, 2]}
             }
             write_link(urdf_file=urdf_file, link_name=cur_link.name, visual=link_visual, collision=link_collision, inertial=link_inertial)
@@ -703,7 +707,7 @@ class InterferenceRemoval:
                     write_link(urdf_file=urdf_file, link_name=cur_link.name + '_virtual')
                     joint1 = {
                         "joint_name": cur_link.name + '_joint1',
-                        "joint_type": "revolute",
+                        "joint_type": "fixed" if getattr(self.args, 'connector_mode', 'motor') == 'none' else "revolute",
                         "parent_link": self.father_link_dict[cur_link.name],
                         "child_link": cur_link.name + '_virtual',
                         "origin": {"xyz": ' '.join(map(str, rel_pos)), "rpy": "0 0 0"},
@@ -714,7 +718,7 @@ class InterferenceRemoval:
                     motor2_pos, motor2_direct, motor_radius = self.link_motor_dict[cur_link.name][0]
                     joint2 = {
                         "joint_name": cur_link.name + '_joint2',
-                        "joint_type": "revolute",
+                        "joint_type": "fixed" if getattr(self.args, 'connector_mode', 'motor') == 'none' else "revolute",
                         "parent_link": cur_link.name + '_virtual',
                         "child_link": cur_link.name,
                         "origin": {"xyz": ' '.join(map(str, (motor2_pos - motor_pos) / 100.0)), "rpy": "0 0 0"},
@@ -728,7 +732,7 @@ class InterferenceRemoval:
                 elif len(cur_link.axis) == 2:
                     cur_joint = {
                         "joint_name": cur_link.name + '_joint',
-                        "joint_type": "revolute",
+                        "joint_type": "fixed" if getattr(self.args, 'connector_mode', 'motor') == 'none' else "revolute",
                         "parent_link": self.father_link_dict[cur_link.name],
                         "child_link": cur_link.name,
                         "origin": {"xyz": ' '.join(map(str, rel_pos)), "rpy": "0 0 0"},
@@ -835,7 +839,7 @@ class InterferenceRemoval:
                 inetial_matrix, CoM = calculate_inertia_tensor((self.mesh_group.get_voxels("BODY") - np.array([[10,0,25]])) / 100.0, part_mass, np.eye(4))
                 link_inertial = {
                     "origin": {"xyz": ' '.join(map(str, CoM)), "rpy": '0 0 0'},
-                    "mass": str(self.mesh_group.get_voxels("BODY").shape[0] * self.args.voxel_density),
+                    "mass": str(part_mass),
                     "inertia": {"ixx": inetial_matrix[0, 0], "iyy": inetial_matrix[1, 1], "izz": inetial_matrix[2, 2], "ixy": inetial_matrix[0, 1], "ixz": inetial_matrix[0, 2], "iyz": inetial_matrix[1, 2]}
                 }
                 write_link(urdf_file=urdf_file, link_name="BODY", visual=link_visual, collision=link_collision, inertial=link_inertial)
@@ -872,7 +876,7 @@ class InterferenceRemoval:
             inetial_matrix, CoM = calculate_inertia_tensor(self.mesh_group.get_voxels(cur_link.name) / 100.0, part_mass, np.eye(4))
             link_inertial = {
                 "origin": {"xyz": ' '.join(map(str, CoM + (rel_pos - motor_pos) / 100.0)), "rpy": '0 0 0'},
-                "mass": str(self.mesh_group.get_voxels(cur_link.name).shape[0] * self.args.voxel_density),
+                "mass": str(part_mass),
                 "inertia": {"ixx": inetial_matrix[0, 0], "iyy": inetial_matrix[1, 1], "izz": inetial_matrix[2, 2], "ixy": inetial_matrix[0, 1], "ixz": inetial_matrix[0, 2], "iyz": inetial_matrix[1, 2]}
             }
             write_link(urdf_file=urdf_file, link_name=cur_link.name, visual=link_visual, collision=link_collision, inertial=link_inertial)

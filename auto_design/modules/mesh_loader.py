@@ -400,12 +400,12 @@ class LinkTreeGUI(QtWidgets.QMainWindow):
         # Set slider ranges using self.mesh_bounds
         bound = self.mesh_bounds
         self.mesh_middle_point = [(bound[0] + bound[1]) / 2, (bound[2] + bound[3]) / 2, (bound[4] + bound[5]) / 2]
-        self.slider_x.setRange(bound[0], bound[1])
-        self.slider_y.setRange(bound[2], bound[3])
-        self.slider_z.setRange(bound[4], bound[5])
-        self.slider_x.setValue(self.mesh_middle_point[0])
-        self.slider_y.setValue(self.mesh_middle_point[1])
-        self.slider_z.setValue(self.mesh_middle_point[2])
+        self.slider_x.setRange(int(bound[0]), int(bound[1]))
+        self.slider_y.setRange(int(bound[2]), int(bound[3]))
+        self.slider_z.setRange(int(bound[4]), int(bound[5]))
+        self.slider_x.setValue(int(self.mesh_middle_point[0]))
+        self.slider_y.setValue(int(self.mesh_middle_point[1]))
+        self.slider_z.setValue(int(self.mesh_middle_point[2]))
 
         # Update the min, max of the joint_x_input based on the mesh bounds
         self.joint_x_input.setRange(bound[0], bound[1])
@@ -437,9 +437,15 @@ class LinkTreeGUI(QtWidgets.QMainWindow):
         # Get the bounds of the mesh
         self.mesh_bounds = stl_mesh.bounds
         center = [(self.mesh_bounds[0] + self.mesh_bounds[1]) / 2, (self.mesh_bounds[2] + self.mesh_bounds[3]) / 2, (self.mesh_bounds[4] + self.mesh_bounds[5]) / 2]
+        extents = np.array([
+            self.mesh_bounds[1] - self.mesh_bounds[0],
+            self.mesh_bounds[3] - self.mesh_bounds[2],
+            self.mesh_bounds[5] - self.mesh_bounds[4],
+        ])
+        self.joint_marker_radius = np.linalg.norm(extents) * 0.015
         # Create a sphere (representing a point)
         self.shpere_position = center
-        self.sphere = pv.Sphere(radius=1, center=self.shpere_position)
+        self.sphere = pv.Sphere(radius=self.joint_marker_radius, center=self.shpere_position)
         # Add the STL mesh with transparency
         self.plotter.add_mesh(stl_mesh, opacity=0.5, color="lightblue")
         # Add a red sphere
@@ -468,9 +474,9 @@ class LinkTreeGUI(QtWidgets.QMainWindow):
         y = self.joint_y_input.value()
         z = self.joint_z_input.value()
 
-        self.slider_x.setValue(x)
-        self.slider_y.setValue(y)
-        self.slider_z.setValue(z)
+        self.slider_x.setValue(int(x))
+        self.slider_y.setValue(int(y))
+        self.slider_z.setValue(int(z))
     
     def update_sphere_position(self, new_position):
         """ Update the sphere position and refresh the plot """
@@ -479,7 +485,10 @@ class LinkTreeGUI(QtWidgets.QMainWindow):
         # Remove the old sphere
         self.plotter.remove_actor(self.sphere_actor)
         # Add a new sphere at the updated position
-        self.sphere_actor = self.plotter.add_mesh(pv.Sphere(radius=1, center=self.sphere_position), color="red")
+        self.sphere_actor = self.plotter.add_mesh(
+            pv.Sphere(radius=self.joint_marker_radius, center=self.sphere_position),
+            color="red",
+        )
         # Update the plotter to reflect changes
         self.plotter.render()
 
@@ -1147,9 +1156,11 @@ class Mesh_Loader:
         Scale the mesh, joint data, and link tree according to the expected x-axis length.
         """
 
-        # Get the scale factor
+        # Get the scale factor. Use the x-axis span (max - min), not 2 * max(x),
+        # so meshes whose origin is not centered on the body still end up with
+        # an x-axis length of exactly expected_x.
         vertices = np.asarray(self.mesh.mesh_o3d.vertices)
-        self.scale_factor = expected_x / 2 / (np.max(vertices[:,0]))
+        self.scale_factor = expected_x / (np.max(vertices[:,0]) - np.min(vertices[:,0]))
 
         # Scale the mesh
         self.scaled_mesh = self.mesh

@@ -1,6 +1,7 @@
 import os
 import argparse
 import numpy as np
+import random
 import pickle as pkl
 import time
 # Add dependencies path
@@ -26,6 +27,38 @@ from modules.destruction_check import destruction_check, destruction_check_urdf_
 # from metamaterial_filling.script.user_stl_force_relative_density_fea_opt import stl_force_relative_density_fea_opt
 # from metamaterial_filling.script.pyansys_fea.mapdl_msh_analysis import MapdlFea
 from motor_param_lib import MotorParameterLib
+
+
+def build_passive_joint_results(args, link_tree):
+    """Build lightweight joint locations without running motor selection/GA."""
+    results = []
+    half_span = max(args.voxel_size, getattr(args, 'magnet_thickness', args.voxel_size))
+    radius = max(args.voxel_size, getattr(args, 'magnet_diameter', args.voxel_size) / 2.0)
+    queue = [link_tree]
+    while queue:
+        node = queue.pop(0)
+        queue.extend(node.children)
+        link = node.val
+        if link.axis is None or np.linalg.norm(link.axis[1]) == 0:
+            continue
+        for axis in link.axis[1:]:
+            direction = np.asarray(axis, dtype=float)
+            direction /= np.linalg.norm(direction)
+            center = np.asarray(link.axis[0], dtype=float)
+            results.append(np.hstack((center - half_span * direction,
+                                      center + half_span * direction,
+                                      radius)))
+    return np.asarray(results)
+
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif value.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError(f"Boolean value expected, got {value!r}")
 
 '''
 This class is used to log the process of the optimization. The log contains a txt file and a pkl file to store the variables.
@@ -87,28 +120,37 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
         decompose_result_image_path = round_result_saving_folder + '/decompose_result.png'
         mesh_decomp.render(save_only=save_only, save_path=decompose_result_image_path)
 
-        ##### Do actuator optimization. The first step in Motor_Opt will use pinocchio to calculate the torque and choose the motor.
-        log.log_txt("Optimizing the actuators...")
+        connector_mode = getattr(args, 'connector_mode', 'motor')
+        ##### Motor mode uses actuator optimization; passive modes only need joint locations.
         actuator_opt_start_time = time.time()
         bounds = get_bounds(mesh_decomp.link_tree, threshold=6)
         motor_param_lib = MotorParameterLib()
         motor_lib = motor_param_lib.get_motor_lib()
         connector_lib = motor_param_lib.get_connector_lib()
-        
-        motor_opt = Motor_Opt(args, mesh_decomp, bounds, motor_lib, connector_lib)
-        motor_results, cost_log, best_fitness = motor_opt.run_opt(generation_num=args.genetic_generation)
+
+        if connector_mode == 'motor':
+            log.log_txt("Optimizing the actuators...")
+            motor_opt = Motor_Opt(args, mesh_decomp, bounds, motor_lib, connector_lib)
+            motor_results, cost_log, best_fitness = motor_opt.run_opt(generation_num=args.genetic_generation)
+        else:
+            log.log_txt("Using annotated joints; motor selection and genetic optimization are disabled.")
+            motor_opt = None
+            motor_results = build_passive_joint_results(args, mesh_decomp.link_tree)
+            cost_log = []
+            best_fitness = 0.0
         actuator_opt_end_time = time.time()
 
         # Log the best fitness and the cost log of the optimization and show the result
         log.log_variable('motor_opt_cost_log', cost_log)
         log.log_variable('motor_opt_time', actuator_opt_end_time - actuator_opt_start_time)
-        log.log_variable('motor_opt_motor_results', motor_opt.motor_results)
+        log.log_variable('motor_opt_motor_results', motor_results)
         log.log_txt("Auto design best fitness: " + str(best_fitness))
         motor_opt_image_path = round_result_saving_folder + '/motor_opt_result.png'
-        motor_opt.render(save_only=save_only, save_path=None)
+        if motor_opt is not None:
+            motor_opt.render(save_only=save_only, save_path=None)
 
         # Up scale the mesh if the avg motor cost is too high
-        avg_motor_cost_this = best_fitness / len(motor_results)
+        avg_motor_cost_this = best_fitness / len(motor_results) if len(motor_results) else 0.0
         log.log_txt("Average motor cost: " + str(avg_motor_cost_this))
         if avg_motor_cost_this > avg_motor_cost_threshold:
             log.log_txt("Failure Code 1. The motor cost is too high. Re-optimizing with a larger model... Scale the model by " + str(enlarge_scale))
@@ -117,10 +159,13 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
             return exit_code
 
         ##### Refine the mesh to connect the joints
-        log.log_txt("Refining the mesh to connect the actuators...")
+        log.log_txt("Preparing joint interfaces in mode: " + connector_mode)
         refine_start_time = time.time()
-        joint_connect_opt = Joint_Connect_Opt(args, mesh_decomp, motor_opt.motor_results)
-        joint_connect_opt.run_opt()
+        joint_connect_opt = Joint_Connect_Opt(args, mesh_decomp, motor_results)
+        if connector_mode == 'motor':
+            joint_connect_opt.run_opt()
+        elif connector_mode == 'magnet':
+            joint_connect_opt.add_magnet_pockets()
         refine_end_time = time.time()
 
         # Log the number of voxels after the joint connection and show the result
@@ -139,8 +184,11 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
                                                 link_tree=mesh_decomp.link_tree, 
                                                 father_link_dict=mesh_decomp.father_link_dict)
         # joint_limits = np.vstack([np.array([-0.785, 0.785]) for _ in range(2*len(motor_results))])
-        interference_removal.set_joint_limit(args.joint_limitation, args.joint_limitation_from_champ)
-        interference_removal.remove_interference()
+        if connector_mode == 'motor':
+            interference_removal.set_joint_limit(args.joint_limitation, args.joint_limitation_from_champ)
+            interference_removal.remove_interference()
+        else:
+            log.log_txt("Skipping motor clearance and rotational interference removal.")
         interference_removal_end_time = time.time()
 
         # Log the number of voxels after the interference removal and show the result
@@ -295,7 +343,8 @@ def auto_design_function(args, mapdl_object=None):
     args.model_name = model_name # To be used in other functions
 
     # Skip the optimization if the result already exists
-    if check_if_result_exists(args.result_folder, model_name, args.max_trial_round):
+    if (getattr(args, 'connector_mode', 'motor') == 'motor'
+            and check_if_result_exists(args.result_folder, model_name, args.max_trial_round)):
         print("The result already exists. Skip the optimization process.")
         return 0
 
@@ -395,21 +444,25 @@ if __name__=="__main__":
     parser.add_argument('--voxel_size', type=float, default=0.5, help='The size of the voxel. (cm)')
     parser.add_argument('--voxel_density', type=float, default=1.2e-4, help='The estimated density of the voxel depending on the material. (kg/cm^3)')
     parser.add_argument('--joint_limitation', type=float, default=0.5, help='The limitation of the joint. +-joint_limitation. (rad)')
-    parser.add_argument('--joint_limitation_from_champ', type=bool, default=True, help='Use champ controller or not. This will affect joint limits.')
+    parser.add_argument('--joint_limitation_from_champ', type=str2bool, default=True, help='Use champ controller or not. This will affect joint limits.')
 
     parser.add_argument('--max_trial_round', type=int, default=8, help='The maximum number of trial rounds.')
     parser.add_argument('--genetic_generation', type=int, default=5, help='The number of generations for the genetic algorithm')
-    parser.add_argument('--do_fea_analysis', type=bool, default=False, help='Do FEA analysis or not. If true, please make sure you have Ansys installed.')
-    parser.add_argument('--regenerate_if_fea_failed', type=bool, default=False, help='Regenerate the model if the FEA analysis failed or not. FEAs are expensive and strict.')
+    parser.add_argument('--do_fea_analysis', type=str2bool, default=False, help='Do FEA analysis or not. If true, please make sure you have Ansys installed.')
+    parser.add_argument('--regenerate_if_fea_failed', type=str2bool, default=False, help='Regenerate the model if the FEA analysis failed or not. FEAs are expensive and strict.')
 
-    parser.add_argument('--visualize', type=bool, default=True, help='Visualize the process or not. Need to close the windows to continue the process if turned on.')
-    parser.add_argument('--disable_joint_setting_ui', type=bool, default=False, help='Disable the joint setting UI or not')
-    parser.add_argument('--joint_setting_standard_scale', type=bool, default=False, help='Scale the model to a standard scale for easier joint setting in the UI or not')
+    parser.add_argument('--visualize', type=str2bool, default=True, help='Visualize the process or not. Need to close the windows to continue the process if turned on.')
+    parser.add_argument('--disable_joint_setting_ui', type=str2bool, default=False, help='Disable the joint setting UI or not')
+    parser.add_argument('--joint_setting_standard_scale', type=str2bool, default=False, help='Scale the model to a standard scale for easier joint setting in the UI or not')
 
     ### No need to set model_name. This is a temporary value. It will be removed in the future.
     parser.add_argument('--model_name', type=str, default='None', help='Temporary value. No need to set this value.')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility. If set, random and numpy random will be seeded.')
 
     args = parser.parse_args()
 
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+
     auto_design_function(args)
-    

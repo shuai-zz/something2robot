@@ -32,7 +32,7 @@ def destruction_check(stl_path, result_pkl_path, voxel_size=0.005, plotting=True
     
     # Load the mesh and do voxelization
     mesh = pv.read(stl_path)
-    voxels = pv.voxelize(mesh, density=voxel_size)
+    voxels = mesh.voxelize(spacing=voxel_size)
     
     #voxels.plot(show_edges=True)
 
