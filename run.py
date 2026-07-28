@@ -184,6 +184,10 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.do_fea_analysis = False
     args.regenerate_if_fea_failed = False
     args.visualize = False
+    # Skip kaleido figure exports in the headless pipeline (each one launches
+    # a headless browser, ~30 s per image on Intel Macs). script/auto_design.py
+    # defaults save_figures to True so interactive/UI usage is unaffected.
+    args.save_figures = False
     args.disable_joint_setting_ui = True
     args.joint_setting_standard_scale = False
     args.model_name = 'None'

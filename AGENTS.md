@@ -409,6 +409,7 @@ uv run python run_joints.py --model <model_name> --expected-x 100 \
   (keyed snap-fit peg holes via `auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p20.stl`, magnet holes, entry relief, fragment cleanup, wall report)
 - `--reuse-decomposition` skips step 1 when `parts_mm` exists (attach alone is ~8 s).
 - Reproducibility: `<out-dir>/run_joints_report.json` records params, seed, git rev, timings.
+- Headless runs skip kaleido figure exports (`args.save_figures = False` in `run.py`; `script/auto_design.py` defaults it to `True` so interactive usage still gets `*_result.png`). This takes a mario decomposition from ~110 s to ~25 s.
 
 ### Joint plans
 

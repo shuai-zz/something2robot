@@ -118,7 +118,9 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
         log.log_variable('decompose_voxel_num', voxel_num)
         log.log_variable('decompose_time', mesh_decomp_end_time - mesh_decomp_start_time)
         decompose_result_image_path = round_result_saving_folder + '/decompose_result.png'
-        mesh_decomp.render(save_only=save_only, save_path=decompose_result_image_path)
+        save_figures = getattr(args, 'save_figures', True)
+        if save_figures:
+            mesh_decomp.render(save_only=save_only, save_path=decompose_result_image_path)
 
         connector_mode = getattr(args, 'connector_mode', 'motor')
         ##### Motor mode uses actuator optimization; passive modes only need joint locations.
@@ -146,7 +148,7 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
         log.log_variable('motor_opt_motor_results', motor_results)
         log.log_txt("Auto design best fitness: " + str(best_fitness))
         motor_opt_image_path = round_result_saving_folder + '/motor_opt_result.png'
-        if motor_opt is not None:
+        if motor_opt is not None and save_figures:
             motor_opt.render(save_only=save_only, save_path=None)
 
         # Up scale the mesh if the avg motor cost is too high
@@ -173,7 +175,8 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
         log.log_variable('joint_connect_voxel_num', voxel_num)
         log.log_variable('joint_connect_time', refine_end_time - refine_start_time)
         joint_connect_opt_image_path = round_result_saving_folder + '/joint_connect_opt_result.png'
-        mesh_decomp.mesh_group.render(save_only=save_only, save_path=joint_connect_opt_image_path)
+        if save_figures:
+            mesh_decomp.mesh_group.render(save_only=save_only, save_path=joint_connect_opt_image_path)
 
         ##### Remove the interference between the links while moving the joints
         log.log_txt("Removing the interference between the links...")
@@ -196,7 +199,8 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
         log.log_variable('interference_removal_voxel_num', voxel_num)
         log.log_variable('interference_removal_time', interference_removal_end_time - interference_removal_start_time)
         interference_removal_image_path = round_result_saving_folder + '/interference_removal_result.png'
-        interference_removal.mesh_group.render(save_only=save_only, save_path=interference_removal_image_path)
+        if save_figures:
+            interference_removal.mesh_group.render(save_only=save_only, save_path=interference_removal_image_path)
 
         ##### Save results
         result_saving_start_time = time.time()

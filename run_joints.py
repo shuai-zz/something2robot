@@ -99,6 +99,10 @@ def main():
                          'to the joints pkl, else preset matched by model stem)')
     ap.add_argument('--reuse-decomposition', action='store_true',
                     help='skip run.py if <out-dir>/parts_mm already exists')
+    ap.add_argument('--repair', action='store_true',
+                    help='pass --repair to run.py: keep only the largest connected '
+                         'component of broken links (safe when the extra components '
+                         'are degenerate slivers)')
     args = ap.parse_args()
 
     stem, stl_path, pkl_path = resolve_model(args.model)
@@ -130,6 +134,8 @@ def main():
                '--connector-mode', 'none',
                '--max-trial-round', '1',
                '--out-dir', out_dir]
+        if args.repair:
+            cmd.append('--repair')
         r = subprocess.run(cmd, env=env, cwd=PROJECT_ROOT)
         dt = time.time() - t0
         report['steps']['decomposition'] = {'seconds': round(dt, 1), 'returncode': r.returncode}
