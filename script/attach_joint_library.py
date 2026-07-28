@@ -266,7 +266,20 @@ def main():
     links = {}
     for f in os.listdir(args.parts_mm):
         if f.lower().endswith('.stl'):
-            links[f[:-4]] = trimesh.load(os.path.join(args.parts_mm, f))
+            mesh = trimesh.load(os.path.join(args.parts_mm, f))
+            # decomposed parts at fine voxel sizes can contain degenerate
+            # zero-volume slivers (2-face shells) that make manifold booleans
+            # reject the mesh ("not all meshes are volumes") — keep the
+            # largest component up front
+            parts = mesh.split(only_watertight=False)
+            if isinstance(parts, trimesh.Trimesh):
+                parts = [parts]
+            if len(parts) > 1:
+                parts = sorted(parts, key=lambda p: p.volume, reverse=True)
+                print(f'  {f}: dropped {len(parts) - 1} degenerate components '
+                      f'(largest dropped: {parts[1].volume:.3f} mm3)')
+                mesh = parts[0]
+            links[f[:-4]] = mesh
     print('links loaded:', sorted(links.keys()))
 
     report = []
