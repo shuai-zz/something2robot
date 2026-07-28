@@ -395,7 +395,7 @@ before marching cubes).
 
 ## Notes
 
-- Keep `package://anything2robot` URDF paths working by ensuring the `anything2robot -> .` symlink exists at repo root. `run.py` creates it automatically.
+- Generated URDFs reference mesh files by **relative filename only** (STLs sit next to the `.urdf`), so no `package://anything2robot` paths or repo-root symlink are needed. The legacy `package://anything2robot/...` rewrite in `run.py` (`copy_parts_with_relative_urdf`) is kept only for reading result folders produced by older runs.
 - Do not run destructive git commands (commit/push/rebase) unless explicitly asked.
 - For reproducibility, always set `--seed`.
 - All output now goes under `result/` in the project root by default.

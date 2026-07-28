@@ -82,22 +82,6 @@ def _print_available_models(models):
         print(f"  - {stem}")
 
 
-def ensure_anything2robot_symlink():
-    """Ensure the root symlink anything2robot -> . exists for package:// URDF paths."""
-    link_path = os.path.join(project_root, 'anything2robot')
-    if os.path.islink(link_path):
-        target = os.readlink(link_path)
-        if os.path.abspath(target) == project_root:
-            return
-        print(f"Warning: replacing existing symlink {link_path} -> {target}")
-        os.remove(link_path)
-    elif os.path.exists(link_path):
-        print(f"Warning: {link_path} exists and is not a symlink; package://anything2robot paths may fail")
-        return
-    os.symlink('.', link_path)
-    print(f"Created symlink: {link_path} -> .")
-
-
 def copy_parts_with_relative_urdf(src_urdf_folder, dst_parts_folder):
     """Copy URDF and STL files to dst_parts_folder, rewrite mesh paths to relative filenames."""
     os.makedirs(dst_parts_folder, exist_ok=True)
@@ -447,12 +431,6 @@ def main():
     out_dir = os.path.abspath(out_dir)
     os.makedirs(out_dir, exist_ok=True)
     report['paths']['out_dir'] = out_dir
-
-    # Ensure symlink
-    try:
-        ensure_anything2robot_symlink()
-    except Exception as e:
-        report['notes'].append(f"Symlink setup failed: {e}")
 
     # Build args and run auto_design
     args = build_args(
