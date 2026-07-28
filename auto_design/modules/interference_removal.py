@@ -217,7 +217,8 @@ class RobotOptResult:
         # o3d.visualization.draw_geometries([mesh] + tenon_vector_o3d)
         
         # 2. Add force and torque information
-        pkg_dir = '.'
+        # Mesh filenames in the URDF are relative to the URDF's own directory
+        pkg_dir = os.path.dirname(self.urdf_dir)
         model, collision_model, visual_model = pin.buildModelsFromUrdf(self.urdf_dir, pkg_dir)
         data = model.createData()
         max_torque = np.zeros((model.nv))
@@ -604,7 +605,6 @@ class InterferenceRemoval:
             os.makedirs(dir)
 
         urdf_file = open(dir + self.args.model_name + timestr + '.urdf', 'w+')
-        package_name = "anything2robot"
 
         self.urdf_dir = dir + self.args.model_name + timestr + '.urdf'
         urdf_file.write('<?xml version="1.0"?>\n')
@@ -624,14 +624,9 @@ class InterferenceRemoval:
 
         self.ideal_mass = 0
 
-        if package_name in dir:
-            # Keep the string after the package name
-            written_in_dir = dir[dir.index(package_name) + len(package_name):]
-        else:
-            written_in_dir = os.path.relpath(dir, '.') + '/'
-
-        if written_in_dir.startswith('/'):
-            written_in_dir = written_in_dir[1:]
+        # Mesh filenames are written relative to the URDF location (the STL
+        # files live in the same directory), so no package:// resolution or
+        # repo-root symlink is needed.
 
         while node_queue:
             root_node = node_queue.pop(0)
@@ -645,12 +640,12 @@ class InterferenceRemoval:
                 voxel_grid_to_mesh(voxel_positions=self.mesh_group.get_voxels("BODY"), dir=dir + 'BODY.stl', voxel_size=self.args.voxel_size)  #-np.array([[10,0,25]])
                 link_visual = {
                     "origin": {"xyz": "0 0 0", "rpy": "0 0 0"},
-                    "geometry": {"filename": "package://" + package_name + "/" + written_in_dir + "BODY.stl"},
+                    "geometry": {"filename": "BODY.stl"},
                     "material": "grey"
                 }
                 link_collision = {
                     "origin": {"xyz": "0 0 0", "rpy": "0 0 0"},
-                    "geometry": {"filename": "package://" + package_name + "/" + written_in_dir + "BODY.stl"}
+                    "geometry": {"filename": "BODY.stl"}
                 }
                 per_voxel_mass = self.args.voxel_density * (self.args.voxel_size ** 3)
                 part_mass = per_voxel_mass * self.mesh_group.get_voxels("BODY").shape[0]
@@ -680,12 +675,12 @@ class InterferenceRemoval:
 
             link_visual = {
                 "origin": {"xyz": ' '.join(map(str, visual_pos)), "rpy": '0 0 0'},
-                "geometry": {"filename": "package://" + package_name + "/" + written_in_dir + "" + cur_link.name + ".stl"},
+                "geometry": {"filename": cur_link.name + ".stl"},
                 "material": "grey"
             }
             link_collision = {
                 "origin": {"xyz": ' '.join(map(str, visual_pos)), "rpy": '0 0 0'},
-                "geometry": {"filename": "package://" + package_name + "/" + written_in_dir + "" + cur_link.name + ".stl"}
+                "geometry": {"filename": cur_link.name + ".stl"}
             }
 
             per_voxel_mass = self.args.voxel_density * (self.args.voxel_size ** 3)
@@ -795,7 +790,6 @@ class InterferenceRemoval:
             os.makedirs(dir)
 
         urdf_file = open(dir + self.args.model_name + timestr + '.urdf', 'w+')
-        package_name = "urdf_description"
 
         self.urdf_dir = dir + self.args.model_name + timestr + '.urdf'
         urdf_file.write('<?xml version="1.0"?>\n')
@@ -827,12 +821,12 @@ class InterferenceRemoval:
                 voxel_grid_to_mesh(voxel_positions=self.mesh_group.get_voxels("BODY") - np.array([[10,0,25]]), dir=dir + 'BODY.stl', voxel_size=self.args.voxel_size)
                 link_visual = {
                     "origin": {"xyz": "0 0 0", "rpy": "0 0 0"},
-                    "geometry": {"filename": "package://" + package_name + "/" + dir + "BODY.stl"},
+                    "geometry": {"filename": "BODY.stl"},
                     "material": "grey"
                 }
                 link_collision = {
                     "origin": {"xyz": "0 0 0", "rpy": "0 0 0"},
-                    "geometry": {"filename": "package://" + package_name + "/" + dir + "BODY.stl"}
+                    "geometry": {"filename": "BODY.stl"}
                 }
                 per_voxel_mass = self.args.voxel_density * (self.args.voxel_size ** 3)
                 part_mass = per_voxel_mass * self.mesh_group.get_voxels("BODY").shape[0]
@@ -863,12 +857,12 @@ class InterferenceRemoval:
 
             link_visual = {
                 "origin": {"xyz": ' '.join(map(str, visual_pos)), "rpy": '0 0 0'},
-                "geometry": {"filename": "package://" + package_name + "/" + dir + "" + cur_link.name + ".stl"},
+                "geometry": {"filename": cur_link.name + ".stl"},
                 "material": "grey"
             }
             link_collision = {
                 "origin": {"xyz": ' '.join(map(str, visual_pos)), "rpy": '0 0 0'},
-                "geometry": {"filename": "package://" + package_name + "/" + dir + "" + cur_link.name + ".stl"}
+                "geometry": {"filename": cur_link.name + ".stl"}
             }
 
             per_voxel_mass = self.args.voxel_density * (self.args.voxel_size ** 3)

@@ -13,7 +13,6 @@ result/
 *.log
 .DS_Store
 .superpowers/
-anything2robot
 result_*/
 .venv/
 .pytest_cache/

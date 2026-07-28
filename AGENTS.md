@@ -395,7 +395,47 @@ before marching cubes).
 
 ## Notes
 
-- Keep `package://anything2robot` URDF paths working by ensuring the `anything2robot -> .` symlink exists at repo root. `run.py` creates it automatically.
+## Joint pipeline (`run_joints.py`)
+
+End-to-end "decompose + drill joint holes" entry point:
+
+```bash
+uv run python run_joints.py --model <model_name> --expected-x 100 \
+  --voxel-size 1.0 --seed 42 --out-dir result/<name>
+```
+
+- Step 1: `run.py --connector-mode none` → `<out-dir>/parts_mm`
+- Step 2: `script/attach_joint_library.py` → `<out-dir>/parts_jointed`
+  (keyed snap-fit peg holes via `auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p20.stl`, magnet holes, entry relief, fragment cleanup, wall report)
+- `--reuse-decomposition` skips step 1 when `parts_mm` exists (attach alone is ~8 s).
+- Reproducibility: `<out-dir>/run_joints_report.json` records params, seed, git rev, timings.
+
+### Joint plans
+
+Which holes to drill is data-driven, not hardcoded. Resolution order
+(`load_joint_plan` in `script/attach_joint_library.py`):
+
+1. `--joint-plan <file.json>`
+2. `--joint-plan <preset>` (built-ins: `mario`, `cactus`)
+3. `<model_stem>_joint_plan.json` next to the model's `_joints.pkl` (convention — **new models need no code change**)
+4. Preset matched by model stem; otherwise a clear error.
+
+Plan JSON format:
+
+```json
+[{"joint": "neck", "type": "magnet", "parent": "BODY", "child": "HEAD"},
+ {"joint": "l_hip", "type": "peg", "parent": "BODY", "child": "L_LEG",
+  "depth_parent": 11.5, "depth_child": 6.0, "axis": [0, 0, -1]}]
+```
+
+Defaults: depth 11.5 mm (full cutter, snap groove flipped to the deep end);
+`axis` defaults to shared-joint → farthest other joint of the child link —
+override it when that heuristic is wrong (e.g. curved links, where the local
+segment direction should be used instead).
+
+## Notes
+
+- Generated URDFs reference mesh files by **relative filename only** (STLs sit next to the `.urdf`), so no `package://anything2robot` paths or repo-root symlink are needed. The legacy `package://anything2robot/...` rewrite in `run.py` (`copy_parts_with_relative_urdf`) is kept only for reading result folders produced by older runs.
 - Do not run destructive git commands (commit/push/rebase) unless explicitly asked.
 - For reproducibility, always set `--seed`.
 - All output now goes under `result/` in the project root by default.

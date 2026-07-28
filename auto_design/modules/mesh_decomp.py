@@ -183,16 +183,24 @@ class Mesh_Group:
         """
 
         added_voxels = []
-        
+        added_indices = []
+
         for initial_group_name in initial_group_names:
-            conditions = condition_func(self.get_voxels(initial_group_name))
-            added_voxels.append(self.get_voxels(initial_group_name)[conditions])
- 
+            # Scan the grid once per group and reuse both the indices and the
+            # positions derived from them (instead of calling get_voxels twice
+            # and recomputing position_to_index three times below).
+            indices = self.get_voxels(initial_group_name, get_index=True)
+            voxels = self.index_to_position(indices)
+            conditions = condition_func(voxels)
+            added_voxels.append(voxels[conditions])
+            added_indices.append(indices[conditions])
+
         added_voxels = np.vstack(added_voxels)
 
         if target_group_name is not None:
-            self.voxel_data[self.position_to_index(added_voxels)[:, 0], self.position_to_index(added_voxels)[:, 1], self.position_to_index(added_voxels)[:, 2]] = self.link_value_dict[target_group_name]
-        
+            added_indices = np.vstack(added_indices)
+            self.voxel_data[added_indices[:, 0], added_indices[:, 1], added_indices[:, 2]] = self.link_value_dict[target_group_name]
+
         return added_voxels
     
     def get_voxel_type(self, positions):
@@ -387,43 +395,71 @@ class Mesh_Decomp:
             projection = p1 + t * line_vec
             return np.linalg.norm(point - projection)
 
-        # Iterate through all voxels
-        import tqdm
-        for i in tqdm.tqdm(range(len(self.occupied_voxels))):
-            voxel = self.occupied_voxels[i]
-            closest_joint = None
-            min_distance = float('inf')
-            
-            # Find the closest joint
-            for joint_name, joint_info in all_joints.items():
-                for link_name, joint_pos in joint_info:
-                    distance = np.linalg.norm(voxel - joint_pos)
-                    if distance < min_distance:
-                        min_distance = distance
-                        closest_joint = joint_name
+        # Vectorized version of point_to_segment_distance for many points and
+        # many segments at once.
+        #   points:  (M, 3)
+        #   segments: (S, 2, 3)
+        # returns min distance from each point to any segment: (M,)
+        def points_to_segments_min_distance(points, segments):
+            p1 = segments[:, 0, :]                       # (S, 3)
+            line_vec = segments[:, 1, :] - p1            # (S, 3)
+            point_vec = points[:, None, :] - p1[None, :, :]   # (M, S, 3)
+            line_len_sq = np.einsum('ij,ij->i', line_vec, line_vec)  # (S,)
+            safe_len_sq = np.where(line_len_sq == 0, 1.0, line_len_sq)
+            t = np.einsum('msj,sj->ms', point_vec, line_vec) / safe_len_sq[None, :]
+            t = np.clip(t, 0.0, 1.0)                     # zero-length segments end up at t=0
+            projection = p1[None, :, :] + t[:, :, None] * line_vec[None, :, :]
+            dist = np.linalg.norm(points[:, None, :] - projection, axis=-1)  # (M, S)
+            return dist.min(axis=1)
 
-            # Determine which link the voxel belongs to
-            if len(all_joints[closest_joint]) == 1:
-                # If the joint belongs to only one link, assign the voxel to that link
-                self.decompose_result[i] = all_joints[closest_joint][0][0]
-            else:
-                # If the joint belongs to multiple links, find the closest line segment.
-                # For links with only one joint (no segments), fall back to point-to-joint distance.
-                min_segment_distance = float('inf')
-                closest_link = None
-                for link_name, joint_pos_for_link in all_joints[closest_joint]:
-                    if len(link_segments[link_name]) == 0:
-                        dist = np.linalg.norm(voxel - joint_pos_for_link)
-                        if dist < min_segment_distance:
-                            min_segment_distance = dist
-                            closest_link = link_name
+        # Iterate through all voxels (vectorized).
+        # 1) Find the closest joint for every voxel via chunked squared-distance
+        #    matmul instead of a Python loop per voxel per joint.
+        joint_names = list(all_joints.keys())
+        joint_positions = np.array(
+            [np.asarray(all_joints[jn][0][1], dtype=float) for jn in joint_names])
+        # Link to use when the closest joint belongs to exactly one link ('' = ambiguous)
+        joint_single_link = np.array(
+            [all_joints[jn][0][0] if len(all_joints[jn]) == 1 else '' for jn in joint_names],
+            dtype=object)
+
+        voxels = self.occupied_voxels.astype(float)
+        n_voxels = len(voxels)
+        closest_joint_idx = np.empty(n_voxels, dtype=np.int64)
+        joint_sq = (joint_positions ** 2).sum(axis=1)
+        chunk_size = 200_000
+        for start in range(0, n_voxels, chunk_size):
+            end = min(start + chunk_size, n_voxels)
+            chunk = voxels[start:end]
+            dist_sq = ((chunk ** 2).sum(axis=1)[:, None]
+                       + joint_sq[None, :]
+                       - 2.0 * chunk @ joint_positions.T)
+            closest_joint_idx[start:end] = np.argmin(dist_sq, axis=1)
+
+        # 2) Voxels whose closest joint belongs to a single link are assigned directly
+        self.decompose_result = joint_single_link[closest_joint_idx].copy()
+
+        # 3) Ambiguous voxels (closest joint shared by several links): group by
+        #    joint and compare vectorized point-to-segment distances per candidate link.
+        ambiguous = np.nonzero(self.decompose_result == '')[0]
+        if len(ambiguous) > 0:
+            amb_joint_idx = closest_joint_idx[ambiguous]
+            for j_idx in np.unique(amb_joint_idx):
+                rows = ambiguous[amb_joint_idx == j_idx]
+                pts = voxels[rows]
+                candidate_links = [ln for ln, _ in all_joints[joint_names[j_idx]]]
+                candidate_dists = []
+                for link_name, joint_pos_for_link in all_joints[joint_names[j_idx]]:
+                    segments = link_segments[link_name]
+                    if len(segments) == 0:
+                        # Link with a single joint: fall back to point-to-joint distance
+                        candidate_dists.append(
+                            np.linalg.norm(pts - np.asarray(joint_pos_for_link, dtype=float), axis=1))
                     else:
-                        for segment in link_segments[link_name]:
-                            segment_distance = point_to_segment_distance(voxel, segment)
-                            if segment_distance < min_segment_distance:
-                                min_segment_distance = segment_distance
-                                closest_link = link_name
-                self.decompose_result[i] = closest_link
+                        candidate_dists.append(points_to_segments_min_distance(
+                            pts, np.asarray(segments, dtype=float)))
+                best = np.argmin(np.stack(candidate_dists, axis=1), axis=1)
+                self.decompose_result[rows] = np.array(candidate_links, dtype=object)[best]
 
         #  Update mesh_group with decomposed voxels and perform clustering for each link
         discarded = []  # (voxel, original_link) pairs cut off from the largest cluster
@@ -462,21 +498,29 @@ class Mesh_Decomp:
         # Reassign them to the closest remaining link instead.
         if discarded and len(all_links) > 1:
             reassign_counts = {}
-            for voxel, original_link in discarded:
-                best_link = None
-                best_dist = float('inf')
-                for link_name in all_links:
-                    if link_name == original_link:
-                        continue
-                    dists = [point_to_segment_distance(voxel, seg) for seg in link_segments[link_name]]
-                    if not dists:  # Link with a single joint: fall back to point-to-joint distance
-                        dists = [min(np.linalg.norm(voxel - jp) for jp in all_links[link_name].joints.values())]
-                    dist = min(dists)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_link = link_name
-                self.mesh_group.set_voxels(best_link, np.asarray([voxel]))
-                reassign_counts[best_link] = reassign_counts.get(best_link, 0) + 1
+            discarded_voxels = np.asarray([voxel for voxel, _ in discarded], dtype=float)
+            discarded_origins = [original_link for _, original_link in discarded]
+            link_names = list(all_links.keys())
+            # (D, L) matrix of min distance from each discarded voxel to each link
+            dist_matrix = np.full((len(discarded_voxels), len(link_names)), np.inf)
+            for link_idx, link_name in enumerate(link_names):
+                segments = link_segments[link_name]
+                if len(segments) == 0:
+                    # Link with a single joint: fall back to point-to-joint distance
+                    jps = np.asarray(list(all_links[link_name].joints.values()), dtype=float)
+                    dist_matrix[:, link_idx] = np.linalg.norm(
+                        discarded_voxels[:, None, :] - jps[None, :, :], axis=-1).min(axis=1)
+                else:
+                    dist_matrix[:, link_idx] = points_to_segments_min_distance(
+                        discarded_voxels, np.asarray(segments, dtype=float))
+            # Never reassign a voxel back to the link it was cut off from
+            origin_cols = np.array([link_names.index(l) for l in discarded_origins])
+            dist_matrix[np.arange(len(discarded_voxels)), origin_cols] = np.inf
+            best_links = np.array(link_names, dtype=object)[np.argmin(dist_matrix, axis=1)]
+            for link_name in np.unique(best_links):
+                mask = best_links == link_name
+                self.mesh_group.set_voxels(link_name, discarded_voxels[mask])
+                reassign_counts[link_name] = int(mask.sum())
             print(f"Reassigned {len(discarded)} disconnected voxels to other links: {reassign_counts}")
         elif discarded:
             # Only one link exists: nothing to reassign to, keep the old behaviour
@@ -626,12 +670,12 @@ class Mesh_Decomp:
             rel_pos = (np.array(cur_link.axis[0]) - np.array(self.father_link_dict[cur_link.name].axis[0]) if cur_link.name != "BODY" else np.array(cur_link.axis[0])) / 100.0
             link_visual = {
                 "origin": {"xyz": ' '.join(map(str, -np.array(cur_link.axis[0]) / 100.0)), "rpy": '0 0 0'},
-                "geometry": {"filename": "package://anything2robot/urdf/" + self.args.model_name + "/tmp/" + cur_link.name + "_ideal.stl"},
+                "geometry": {"filename": cur_link.name + "_ideal.stl"},
                 "material": "grey"
             }
             link_collision = {
                 "origin": {"xyz": ' '.join(map(str, -np.array(cur_link.axis[0]) / 100.0)), "rpy": '0 0 0'},
-                "geometry": {"filename": "package://anything2robot/urdf/" + self.args.model_name + "/tmp/" + cur_link.name + "_ideal.stl"}
+                "geometry": {"filename": cur_link.name + "_ideal.stl"}
             }
             per_voxel_mass = self.args.voxel_density * (self.args.voxel_size ** 3)
             part_mass = per_voxel_mass * self.mesh_group.get_voxels(cur_link.name).shape[0]
@@ -732,7 +776,8 @@ class Mesh_Decomp:
         """
         self.generate_ideal_urdf()
         urdf_dir = self.urdf_dir
-        pkg_dir = '.'
+        # Mesh filenames in the URDF are relative to the URDF's own directory
+        pkg_dir = os.path.dirname(urdf_dir)
 
         model, collision_model, visual_model = pin.buildModelsFromUrdf(urdf_dir, pkg_dir)
 
