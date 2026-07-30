@@ -725,13 +725,13 @@ class Joint_Connect_Opt:
                 joint_lower = joint_name.lower()
                 if 'ankle' in joint_lower:
                     if joint_lower.startswith('left'):
-                        joint_angle_min, joint_angle_max = -30.0, 5.0
+                        joint_angle_min, joint_angle_max = -20.0, 5.0
                     else:
-                        joint_angle_min, joint_angle_max = -5.0, 30.0
+                        joint_angle_min, joint_angle_max = -5.0, 20.0
                 elif 'knee' in joint_lower:
-                    joint_angle_min, joint_angle_max = -35.0, 35.0
+                    joint_angle_min, joint_angle_max = -25.0, 25.0
                 elif 'elbow' in joint_lower:
-                    joint_angle_min, joint_angle_max = -50.0, 50.0
+                    joint_angle_min, joint_angle_max = -40.0, 40.0
             if len(link.axis) != 2 and axis_override is None:
                 continue
             axis = (axis_override.copy() if axis_override is not None
