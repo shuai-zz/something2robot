@@ -719,6 +719,19 @@ class Joint_Connect_Opt:
 
             joint_name = shared[0]
             center = np.asarray(link.joints[joint_name], dtype=float)
+            joint_angle_min = angle_min
+            joint_angle_max = angle_max
+            if getattr(self.args, 'hinge_anatomical_limits', False):
+                joint_lower = joint_name.lower()
+                if 'ankle' in joint_lower:
+                    if joint_lower.startswith('left'):
+                        joint_angle_min, joint_angle_max = -30.0, 5.0
+                    else:
+                        joint_angle_min, joint_angle_max = -5.0, 30.0
+                elif 'knee' in joint_lower:
+                    joint_angle_min, joint_angle_max = -35.0, 35.0
+                elif 'elbow' in joint_lower:
+                    joint_angle_min, joint_angle_max = -50.0, 50.0
             if len(link.axis) != 2 and axis_override is None:
                 continue
             axis = (axis_override.copy() if axis_override is not None
@@ -892,7 +905,9 @@ class Joint_Connect_Opt:
             shape = np.asarray(self.mesh_decomp.mesh_group.voxel_data.shape)
             cleared_indices = []
             for angle_deg in np.arange(
-                    angle_min, angle_max + angle_step * 0.5, angle_step):
+                    joint_angle_min,
+                    joint_angle_max + angle_step * 0.5,
+                    angle_step):
                 theta = np.deg2rad(angle_deg)
                 rel = subtree_voxels - center
                 rotated = (
@@ -920,7 +935,7 @@ class Joint_Connect_Opt:
                 print(
                     f'Voxel hinge {joint_name}: motion sweep cleared '
                     f'{len(cleared_indices)} static voxels over '
-                    f'{angle_min}..{angle_max} degrees')
+                    f'{joint_angle_min}..{joint_angle_max} degrees')
 
             protected = np.vstack((parent_added, child_added))
             if len(protected):

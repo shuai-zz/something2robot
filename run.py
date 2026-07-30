@@ -175,7 +175,8 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                hinge_angle_max=45.0, hinge_angle_step=5.0,
                hinge_motion_clearance=0.5, hinge_motion_radius=15.0,
                hinge_axis_override=None, hinge_detent_radius=0.0,
-               hinge_detent_clearance=0.3, ball_joints='l_hip,r_hip',
+               hinge_detent_clearance=0.3,
+               hinge_anatomical_limits=False, ball_joints='l_hip,r_hip',
                ball_axis='0,1,0', ball_diameter=11.0,
                ball_clearance=0.5, ball_socket_wall=2.0,
                ball_neck_diameter=4.0, ball_neck_length=4.0,
@@ -222,6 +223,7 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.hinge_axis_override = hinge_axis_override
     args.hinge_detent_radius = hinge_detent_radius / 10.0
     args.hinge_detent_clearance = hinge_detent_clearance / 10.0
+    args.hinge_anatomical_limits = hinge_anatomical_limits
     args.ball_joints = ball_joints
     args.ball_axis = ball_axis
     args.ball_diameter = ball_diameter / 10.0
@@ -439,6 +441,8 @@ def main():
                         help='Radius in mm of two neutral-position locking pegs')
     parser.add_argument('--hinge-detent-clearance', type=float, default=0.3,
                         help='Radial clearance around hinge detent pockets in mm')
+    parser.add_argument('--hinge-anatomical-limits', action='store_true',
+                        help='Use mirrored one-sided ankle ranges and symmetric knee/elbow ranges')
     parser.add_argument('--ball-joints', default='l_hip,r_hip')
     parser.add_argument('--ball-axis', default='0,1,0',
                         help='Insertion direction before left/right mirroring')
@@ -631,6 +635,7 @@ def main():
         hinge_axis_override=args_cli.hinge_axis_override,
         hinge_detent_radius=args_cli.hinge_detent_radius,
         hinge_detent_clearance=args_cli.hinge_detent_clearance,
+        hinge_anatomical_limits=args_cli.hinge_anatomical_limits,
         ball_joints=args_cli.ball_joints,
         ball_axis=args_cli.ball_axis,
         ball_diameter=args_cli.ball_diameter,
