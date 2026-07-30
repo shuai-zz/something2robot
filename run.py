@@ -174,7 +174,11 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                hinge_root_length=5.0, hinge_angle_min=-45.0,
                hinge_angle_max=45.0, hinge_angle_step=5.0,
                hinge_motion_clearance=0.5, hinge_motion_radius=15.0,
-               hinge_axis_override=None):
+               hinge_axis_override=None, ball_joints='l_hip,r_hip',
+               ball_axis='0,1,0', ball_diameter=11.0,
+               ball_clearance=0.5, ball_socket_wall=2.0,
+               ball_neck_diameter=4.0, ball_neck_length=4.0,
+               ball_root_length=8.0, ball_opening_ratio=0.8):
     args = AutoDesignArgs()
     args.stl_mesh_path = os.path.abspath(stl_path)
     args.joint_pkl_path = os.path.abspath(joints_path)
@@ -215,6 +219,15 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.hinge_motion_clearance = hinge_motion_clearance / 10.0
     args.hinge_motion_radius = hinge_motion_radius / 10.0
     args.hinge_axis_override = hinge_axis_override
+    args.ball_joints = ball_joints
+    args.ball_axis = ball_axis
+    args.ball_diameter = ball_diameter / 10.0
+    args.ball_clearance = ball_clearance / 10.0
+    args.ball_socket_wall = ball_socket_wall / 10.0
+    args.ball_neck_diameter = ball_neck_diameter / 10.0
+    args.ball_neck_length = ball_neck_length / 10.0
+    args.ball_root_length = ball_root_length / 10.0
+    args.ball_opening_ratio = ball_opening_ratio
     return args
 
 
@@ -368,7 +381,7 @@ def main():
                         help='Repair disconnected STL links by keeping largest component')
     parser.add_argument('--skip-motors', action='store_true',
                         help='Skip motor visualization export')
-    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'tenon', 'voxel-hinge', 'none'), default='motor',
+    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'tenon', 'voxel-hinge', 'voxel-ball', 'none'), default='motor',
                         help='Joint interface: motor, experimental magnet, fitted coaxial tenon, or plain split')
     parser.add_argument('--hinge-joints', default='l_knee,r_knee',
                         help='Comma-separated joint names for voxel-hinge mode')
@@ -385,6 +398,16 @@ def main():
                         help='Radius of the local child motion envelope in mm')
     parser.add_argument('--hinge-axis-override', default=None,
                         help='Global hinge/pin axis as x,y,z; e.g. 0,1,0')
+    parser.add_argument('--ball-joints', default='l_hip,r_hip')
+    parser.add_argument('--ball-axis', default='0,1,0',
+                        help='Insertion direction before left/right mirroring')
+    parser.add_argument('--ball-diameter', type=float, default=11.0)
+    parser.add_argument('--ball-clearance', type=float, default=0.5)
+    parser.add_argument('--ball-socket-wall', type=float, default=2.0)
+    parser.add_argument('--ball-neck-diameter', type=float, default=4.0)
+    parser.add_argument('--ball-neck-length', type=float, default=4.0)
+    parser.add_argument('--ball-root-length', type=float, default=8.0)
+    parser.add_argument('--ball-opening-ratio', type=float, default=0.8)
     parser.add_argument('--magnet-diameter', type=float, default=6.0,
                         help='Magnet diameter in mm, used with --connector-mode magnet (default: 6.0)')
     parser.add_argument('--magnet-thickness', type=float, default=2.0,
@@ -435,6 +458,21 @@ def main():
             parser.error('--hinge-angle-min must be less than --hinge-angle-max')
         if args_cli.hinge_angle_step <= 0:
             parser.error('--hinge-angle-step must be positive')
+    if args_cli.connector_mode == 'voxel-ball':
+        ball_positive = {
+            '--ball-diameter': args_cli.ball_diameter,
+            '--ball-socket-wall': args_cli.ball_socket_wall,
+            '--ball-neck-diameter': args_cli.ball_neck_diameter,
+            '--ball-neck-length': args_cli.ball_neck_length,
+            '--ball-root-length': args_cli.ball_root_length,
+        }
+        invalid = [name for name, value in ball_positive.items() if value <= 0]
+        if invalid:
+            parser.error(', '.join(invalid) + ' must be positive')
+        if args_cli.ball_clearance < 0:
+            parser.error('--ball-clearance cannot be negative')
+        if not 0.5 < args_cli.ball_opening_ratio < 1.0:
+            parser.error('--ball-opening-ratio must be between 0.5 and 1.0')
     if args_cli.connector_mode == 'tenon':
         positive = {
             '--tenon-radius': args_cli.tenon_radius,
@@ -548,6 +586,15 @@ def main():
         hinge_motion_clearance=args_cli.hinge_motion_clearance,
         hinge_motion_radius=args_cli.hinge_motion_radius,
         hinge_axis_override=args_cli.hinge_axis_override,
+        ball_joints=args_cli.ball_joints,
+        ball_axis=args_cli.ball_axis,
+        ball_diameter=args_cli.ball_diameter,
+        ball_clearance=args_cli.ball_clearance,
+        ball_socket_wall=args_cli.ball_socket_wall,
+        ball_neck_diameter=args_cli.ball_neck_diameter,
+        ball_neck_length=args_cli.ball_neck_length,
+        ball_root_length=args_cli.ball_root_length,
+        ball_opening_ratio=args_cli.ball_opening_ratio,
     )
 
     design_start = time.time()

@@ -895,6 +895,131 @@ class Joint_Connect_Opt:
                              + ', '.join(sorted(missing)))
         return generated
 
+    def add_voxel_ball_joints(self):
+        """Add BODY studs and side-entry sockets for detachable hip joints."""
+        requested = {
+            name.strip() for name in self.args.ball_joints.split(',')
+            if name.strip()
+        }
+        base_axis = np.asarray(
+            [float(value) for value in self.args.ball_axis.split(',')],
+            dtype=float)
+        if base_axis.shape != (3,) or np.linalg.norm(base_axis) == 0:
+            raise ValueError('ball_axis must be three non-zero comma-separated values')
+        base_axis /= np.linalg.norm(base_axis)
+        ball_radius = self.args.ball_diameter / 2.0
+        cavity_radius = ball_radius + self.args.ball_clearance
+        outer_radius = cavity_radius + self.args.ball_socket_wall
+        neck_radius = self.args.ball_neck_diameter / 2.0
+        neck_length = self.args.ball_neck_length
+        root_length = self.args.ball_root_length
+        opening_radius = ball_radius * self.args.ball_opening_ratio
+        if neck_radius >= opening_radius:
+            raise ValueError('ball neck must fit through the socket opening')
+
+        all_groups = list(self.mesh_decomp.mesh_group.link_value_dict.keys())
+        generated = []
+        queue = [self.mesh_decomp.link_tree]
+        while queue:
+            node = queue.pop(0)
+            queue.extend(node.children)
+            link = node.val
+            parent_name = self.father_dict.get(link.name)
+            if parent_name is None:
+                continue
+            parent_joints = self.father_dict_ori[link.name].joints
+            shared = [name for name in link.joints if name in parent_joints]
+            if len(shared) != 1 or shared[0] not in requested:
+                continue
+
+            joint_name = shared[0]
+            center = np.asarray(link.joints[joint_name], dtype=float)
+            # Mirror the insertion direction so each stud points out of its
+            # corresponding side of BODY.
+            insert_dir = base_axis.copy()
+            if joint_name.lower().startswith('r_'):
+                insert_dir *= -1.0
+            other_points = np.asarray(
+                [point for name, point in link.joints.items() if name != joint_name],
+                dtype=float)
+            child_dir = other_points.mean(axis=0) - center
+            child_dir -= np.dot(child_dir, insert_dir) * insert_dir
+            child_dir /= np.linalg.norm(child_dir)
+            ball_center = center + insert_dir * neck_length
+
+            def local(pts):
+                rel_ball = pts - ball_center
+                insertion = np.dot(rel_ball, insert_dir)
+                insertion_radial = np.linalg.norm(
+                    rel_ball - np.outer(insertion, insert_dir), axis=1)
+                rootwise = np.dot(rel_ball, child_dir)
+                root_radial = np.linalg.norm(
+                    rel_ball - np.outer(rootwise, child_dir), axis=1)
+                return rel_ball, insertion, insertion_radial, rootwise, root_radial
+
+            def envelope(pts):
+                rel_ball, insertion, insertion_radial, rootwise, root_radial = local(pts)
+                around_ball = np.linalg.norm(rel_ball, axis=1) <= outer_radius + self.args.voxel_size
+                around_neck = np.logical_and.reduce((
+                    insertion >= -neck_length - self.args.voxel_size,
+                    insertion <= 0,
+                    insertion_radial <= outer_radius))
+                around_root = np.logical_and.reduce((
+                    rootwise >= 0,
+                    rootwise <= root_length + self.args.voxel_size,
+                    root_radial <= outer_radius + self.args.voxel_size))
+                return around_ball | around_neck | around_root
+
+            self.mesh_decomp.mesh_group.move_voxels(
+                all_groups, 'Unoccupied', envelope)
+
+            def parent_stud(pts):
+                rel_ball, insertion, insertion_radial, _, _ = local(pts)
+                ball = np.linalg.norm(rel_ball, axis=1) <= ball_radius
+                neck = np.logical_and.reduce((
+                    insertion >= -neck_length,
+                    insertion <= 0,
+                    insertion_radial <= neck_radius))
+                return ball | neck
+
+            def child_socket(pts):
+                rel_ball, insertion, insertion_radial, rootwise, root_radial = local(pts)
+                distance = np.linalg.norm(rel_ball, axis=1)
+                shell = np.logical_and(
+                    distance <= outer_radius, distance >= cavity_radius)
+                # Cylindrical side entry: narrower than the ball, wide enough
+                # for the neck, and open toward BODY.
+                entry = np.logical_and(insertion <= 0,
+                                       insertion_radial <= opening_radius)
+                shell &= ~entry
+                root = np.logical_and.reduce((
+                    rootwise >= 0,
+                    rootwise <= root_length,
+                    root_radial <= outer_radius * 0.72))
+                cavity = distance < cavity_radius
+                return np.logical_and(shell | root, ~cavity & ~entry)
+
+            parent_added = self.mesh_decomp.mesh_group.move_voxels(
+                ['Unoccupied'], parent_name, parent_stud)
+            child_added = self.mesh_decomp.mesh_group.move_voxels(
+                ['Unoccupied'], link.name, child_socket)
+            protected = np.vstack((parent_added, child_added))
+            if len(protected):
+                indices = self.mesh_decomp.mesh_group.position_to_index(protected)
+                self.mesh_decomp.mesh_group.voxel_no_removal[
+                    indices[:, 0], indices[:, 1], indices[:, 2]] = 1
+            generated.append(joint_name)
+            print(
+                f'Voxel ball {joint_name}: parent stud={parent_name}, '
+                f'child socket={link.name}, insertion={insert_dir.round(3)}, '
+                f'ball diameter={self.args.ball_diameter:.3f} cm')
+
+        missing = requested - set(generated)
+        if missing:
+            raise ValueError('Requested ball joints not found: '
+                             + ', '.join(sorted(missing)))
+        return generated
+
     def add_magnet_pockets(self):
         """Carve blind cylindrical magnet pockets into both sides of each joint,
         with flat interface cutting beforehand."""
