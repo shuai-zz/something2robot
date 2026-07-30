@@ -827,9 +827,14 @@ class Joint_Connect_Opt:
                 # parent pocket at the neutral angle.  The child bump overlaps
                 # the ear so it is printed as part of the moving link.
                 detent_radial = outer_radius * 0.62
+                detent_protrusion = min(
+                    self.args.voxel_size * 0.75,
+                    detent_radius * 0.4)
+                detent_axial = (
+                    ear / 2.0 - detent_radius + gap + detent_protrusion)
                 detent_centers = [
                     center + child_dir * detent_radial
-                    + axis * sign * (ear / 2.0 + detent_radius * 0.45)
+                    + axis * sign * detent_axial
                     for sign in (-1.0, 1.0)
                 ]
 
