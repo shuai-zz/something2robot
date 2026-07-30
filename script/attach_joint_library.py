@@ -4,21 +4,22 @@ Joint plan: built-in presets (JOINT_PLANS below) or a JSON file per model —
 see load_joint_plan() for resolution order and the file format. To support a
 new model, add <model_stem>_joint_plan.json next to its _joints.pkl.
   neck                    -> blind magnet holes (default dia 9 x depth 4) on BODY and HEAD
-  hips / knees / ankles   -> keyed peg holes (snap-fit) on BOTH parent and child
+  hips / ankles           -> keyed peg holes (snap-fit) on BOTH parent and child
 
-Peg hole cutter: auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p20.stl
-  - axis along +Z, entry at z=0, snap groove at z=2.7..4.6, straight guide to z=11.5
+Peg hole cutter: auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p30.stl
+  - axis along +Z, entry at z=0 (small lip to z=-0.3), snap groove at z≈2.5..5,
+    straight guide to z=11.5
   - keyed anti-rotation flats are perpendicular to the cutter Y axis
-  - 0.2 mm clearance is already built into the cutter, use it directly for boolean
+  - 0.3 mm clearance is already built into the cutter, use it directly for boolean
 
 Placement rules:
   - hole axis = joint separation direction, drilled from the cut face INTO each link
     (parent gets the hole pointing away from the child and vice versa)
   - anti-rotation flats are kept parallel to the figure's chest/back plane
     (cutter Y axis mapped onto the model Y axis as closely as the hole axis allows)
-  - when one link receives two holes from opposite ends (e.g. lower legs), the
-    holes are shortened so a wall remains between them (see depth overrides and
-    the wall report printed at the end)
+  - when one link receives two holes from opposite ends, the holes can be
+    shortened via depth overrides so a wall remains between them (see the
+    wall report printed at the end)
 
 Positions: joint annotations are in source-STL units; parts_mm STLs are in
 millimetres. unit_scale = expected_x_mm / source_stl_x_extent converts them.
@@ -42,22 +43,24 @@ import trimesh
 JOINT_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', 'auto_design', 'model', 'joint_models')
 PEG_CUTTER_PATH = os.path.join(JOINT_MODELS_DIR, 'peg_joint',
-                               '7mm_keyed_peg_hole_cutter_clearance_0p20.stl')
+                               '7mm_keyed_peg_hole_cutter_clearance_0p30.stl')
 PEG_FULL_DEPTH = 11.5  # cutter spans z=0 (entry) .. z=11.5 (deep end)
 
 # Joint plans per model. depth_parent / depth_child override PEG_FULL_DEPTH.
 JOINT_PLANS = {
     'mario': [
-        {'joint': 'neck',    'type': 'magnet', 'parent': 'BODY',        'child': 'HEAD'},
-        {'joint': 'l_hip',   'type': 'peg',    'parent': 'BODY',        'child': 'L_LEG'},
-        {'joint': 'r_hip',   'type': 'peg',    'parent': 'BODY',        'child': 'R_LEG'},
-        # lower legs are only ~14 mm tall: shorten both their holes to keep a wall
-        {'joint': 'l_knee',  'type': 'peg',    'parent': 'L_LEG',       'child': 'L_LOWER_LEG', 'depth_child': 6.0},
-        {'joint': 'r_knee',  'type': 'peg',    'parent': 'R_LEG',       'child': 'R_LOWER_LEG', 'depth_child': 6.0},
+        {'joint': 'neck',    'type': 'magnet', 'parent': 'BODY',  'child': 'HEAD'},
+        {'joint': 'l_hip',   'type': 'peg',    'parent': 'BODY',  'child': 'L_LEG'},
+        {'joint': 'r_hip',   'type': 'peg',    'parent': 'BODY',  'child': 'R_LEG'},
+        # knees removed 2026-07-29: lower legs merged into L_LEG / R_LEG, so the
+        # leg now spans hip -> ankle; both ends take full-depth holes (wall ~17 mm)
         # ankles: drill straight down (vertical) instead of along the foot so the
         # peg can be inserted without interference
-        {'joint': 'l_ankle', 'type': 'peg',    'parent': 'L_LOWER_LEG', 'child': 'L_FOOT',      'depth_parent': 6.0, 'axis': [0, 0, -1]},
-        {'joint': 'r_ankle', 'type': 'peg',    'parent': 'R_LOWER_LEG', 'child': 'R_FOOT',      'depth_parent': 6.0, 'axis': [0, 0, -1]},
+        {'joint': 'l_ankle', 'type': 'peg',    'parent': 'L_LEG', 'child': 'L_FOOT', 'axis': [0, 0, -1]},
+        {'joint': 'r_ankle', 'type': 'peg',    'parent': 'R_LEG', 'child': 'R_FOOT', 'axis': [0, 0, -1]},
+        # NOTE: hardware_bay for the 29.8 mm smart-hardware cube is implemented
+        # but disabled — the 100 mm mario torso has no clean spot for it
+        # (neck taper above, hip peg holes below). See AGENTS.md "Hardware bay".
     ],
     'cactus': [
         {'joint': 'body_waist', 'type': 'peg', 'parent': 'BODY', 'child': 'base'},
@@ -121,11 +124,11 @@ def peg_cutter(direction, depth, flip=False):
     """Keyed peg hole cutter placed with its entry at the origin and its
     axis along `direction`, truncated to `depth` (capped).
 
-    The cutter's snap groove (the "big end", z=2.7..4.6 in library coords)
+    The cutter's snap groove (the "big end", z≈2.5..5 in library coords)
     sits near its z=0 end. For full-depth holes the groove must be at the
     DEEP end of the hole ("big end toward the model interior"): flip the
     cutter so the smooth guide enters first and the groove lands at
-    z=6.9..8.8. Short holes (depth overrides) keep the groove within the
+    z≈6.5..9. Short holes (depth overrides) keep the groove within the
     shallow hole and are used unflipped.
     """
     cutter = trimesh.load(PEG_CUTTER_PATH)
@@ -237,6 +240,206 @@ def load_joint_plan(value, joints_pkl):
                      f"or create {conv}")
 
 
+def ray_surface(mesh, point, direction):
+    """First surface hit casting from OUTSIDE the mesh toward it along direction."""
+    direction = np.asarray(direction, dtype=float)
+    direction /= np.linalg.norm(direction)
+    origin = point + direction * 80.0
+    ray = trimesh.ray.ray_triangle.RayMeshIntersector(mesh)
+    locs, _, _ = ray.intersects_location([origin], [-direction])
+    if len(locs) == 0:
+        raise RuntimeError(f'no surface along {direction} near {point}')
+    return locs[np.argmin((locs - origin) @ -direction)]
+
+
+def oriented_box(dims, rot, center):
+    """Box with extents `dims`, axes rotated by rot, centered at center."""
+    b = trimesh.creation.box(extents=list(dims))
+    t = np.eye(4)
+    t[:3, :3] = rot
+    b.apply_transform(t)
+    b.apply_translation(center)
+    return b
+
+
+def cylinder_along(direction, radius, height, center):
+    """Cylinder of given radius/height whose axis follows direction, centered at center."""
+    c = trimesh.creation.cylinder(radius=radius, height=height, sections=48)
+    z = np.array([0, 0, 1.0])
+    direction = np.asarray(direction, dtype=float)
+    direction /= np.linalg.norm(direction)
+    if np.allclose(z, direction):
+        pass
+    elif np.allclose(z, -direction):
+        c.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [1, 0, 0]))
+    else:
+        t = np.eye(4)
+        t[:3, :3] = rotation_with_axis(direction)
+        c.apply_transform(t)
+    c.apply_translation(center)
+    return c
+
+
+def bay_metrics(mesh, pos, open_dir, R, size, lip, capsules):
+    """Score a candidate bay position WITHOUT carving (pure ray casts +
+    capsule math). Returns dict of min wall thicknesses in mm:
+      front_min : shell in front of the cavity's front wall (grid over the
+                  wall plane extended by the seat lip — catches edge slits)
+      side_min  : shell outside the 4 lateral walls (3 samples each)
+      hole_min  : clearance to existing peg/magnet hole capsules
+    """
+    ux, uy = R[:, 0], R[:, 1]
+    out = {}
+
+    def wall_thickness(wall_point, d):
+        """Shell thickness from a cavity wall point outward along d.
+        Casts from OUTSIDE the mesh so interior surfaces (holes) are ignored.
+        Returns 0 when the wall point itself is outside the silhouette
+        (cavity would poke out)."""
+        wp = np.asarray(wall_point, dtype=float)
+        if not mesh.contains([wp])[0]:
+            return 0.0
+        hit = ray_surface(mesh, wp, d)
+        return float((hit - wp) @ d)
+
+    # front wall (opposite the opening), grid over wall + lip extent
+    front_plane = pos - open_dir * (size / 2.0)
+    vals = []
+    for i in np.linspace(-1, 1, 5):
+        for j in np.linspace(-1, 1, 5):
+            off = ux * (i * (size / 2 + lip)) + uy * (j * (size / 2 + lip))
+            vals.append(wall_thickness(front_plane + off, -open_dir))
+    out['front_min'] = round(min(vals), 2)
+
+    # lateral walls, 3 samples each
+    side_vals = []
+    for d, u in [(R[:, 0], uy), (-R[:, 0], uy), (R[:, 1], ux), (-R[:, 1], ux)]:
+        for k in np.linspace(-1, 1, 3):
+            side_vals.append(wall_thickness(pos + d * (size / 2.0) + u * (k * size / 2.5), d))
+    out['side_min'] = round(min(side_vals), 2)
+
+    # clearance to existing holes: AABB-vs-AABB signed distance, with the hole
+    # modelled as a flat-ended cylinder (radius r except along its own axis) —
+    # a capsule model would overshoot by r at the blind end and flag phantom
+    # collisions (e.g. with the neck magnet hole floor)
+    def aabb_signed_gap(lo_a, hi_a, lo_b, hi_b):
+        gaps = np.maximum(lo_a - hi_b, lo_b - hi_a)
+        if np.all(gaps < 0):
+            return float(np.max(gaps))  # overlapping: negative clearance
+        return float(np.linalg.norm(np.maximum(gaps, 0)))
+
+    half = np.abs(R[:, 0]) * size / 2 + np.abs(R[:, 1]) * size / 2 + np.abs(open_dir) * size / 2
+    cav_lo, cav_hi = pos - half, pos + half
+    hole_vals = []
+    for (p1, p2, r, axis) in capsules:
+        radial = 1.0 - np.abs(axis)
+        hole_lo = np.minimum(p1, p2) - r * radial
+        hole_hi = np.maximum(p1, p2) + r * radial
+        hole_vals.append(aabb_signed_gap(cav_lo, cav_hi, hole_lo, hole_hi))
+    out['hole_min'] = round(min(hole_vals), 2) if hole_vals else None
+    return out
+
+
+def find_bay_position(mesh, cfg, R, size, lip, capsules, open_dir):
+    """Grid-search the bay position maximizing the worst wall thickness.
+    Search ranges from cfg['search_center'] / cfg['search_y'] / cfg['search_z']
+    (defaults tuned for a torso). Returns (best_pos, metrics)."""
+    x0, y0, z0 = cfg.get('search_center', [0, 0, 0])
+    xs = cfg.get('search_x', np.arange(x0 - 2, x0 + 3, 1.0))
+    ys = cfg.get('search_y', np.arange(y0, y0 + 9, 1.0))
+    zs = cfg.get('search_z', np.arange(z0 - 3, z0 + 7, 1.0))
+    scored = []
+    for z in zs:
+        for y in ys:
+            for x in xs:
+                pos = np.array([x, y, z], dtype=float)
+                m = bay_metrics(mesh, pos, open_dir, R, size, lip, capsules)
+                score = min(m['front_min'], m['side_min'],
+                            m['hole_min'] if m['hole_min'] is not None else 99)
+                scored.append((score, pos, m))
+    scored.sort(key=lambda t: -t[0])
+    for score, pos, m in scored[:3]:
+        print(f'  [hardware_bay] candidate {pos.tolist()} worst={score:.2f} {m}')
+    best_pos, best_m = scored[0][1], scored[0][2]
+    return best_pos, best_m
+
+
+def hardware_bay(link_mesh, cfg, out_dir, link_name, capsules=None):
+    """Carve a cubic hardware bay into link_mesh and build its friction cover.
+
+    Steps (all manifold booleans):
+      1. cubic cavity (size + 2*clearance)^3 at cfg['position'], or at an
+         auto-searched position when cfg['position'] == 'auto' (maximizes the
+         worst wall thickness via bay_metrics; capsules = existing holes to avoid)
+      2. square opening channel from the cavity through the shell along
+         cfg['open_direction'], plus a recessed seat for the cover
+      3. friction cover (separate STL): plate sized to the seat + plug into
+         the channel, optional center speaker hole
+      4. optional speaker grille (grid of small holes) on the opposite side
+    Returns (new_link_mesh, cover_mesh, info_dict).
+    """
+    open_dir = np.asarray(cfg['open_direction'], dtype=float)
+    open_dir /= np.linalg.norm(open_dir)
+    size = cfg.get('size', 29.8) + 2.0 * cfg.get('clearance', 0.4)
+    lip = cfg.get('seat_lip', 2.0)
+    seat_depth = cfg.get('seat_depth', 2.0)
+    plug_depth = cfg.get('plug_depth', 2.0)
+    R = rotation_with_axis(open_dir, flat_normal=np.array([0.0, 0.0, 1.0]))
+
+    if isinstance(cfg.get('position'), str) and cfg['position'] == 'auto':
+        pos, metrics = find_bay_position(link_mesh, cfg, R, size, lip,
+                                         capsules or [], open_dir)
+        print(f'  [hardware_bay] auto position {pos.tolist()} (metrics {metrics})')
+    else:
+        pos = np.asarray(cfg.get('position', [0, 0, 0]), dtype=float)
+
+    surf = ray_surface(link_mesh, pos, open_dir)
+
+    cavity = oriented_box([size, size, size], R, pos)
+    chan_len = float((surf - pos) @ open_dir) - size / 2.0 + 8.0
+    channel = oriented_box([size, size, chan_len], R, pos + open_dir * (size / 2.0 + chan_len / 2.0))
+    seat = oriented_box([size + 2 * lip, size + 2 * lip, seat_depth + 4.0], R,
+                        surf + open_dir * (4.0 - seat_depth) / 2.0)
+    body = link_mesh.difference([cavity, channel, seat], engine='manifold')
+
+    # speaker grille on the side opposite the opening
+    g = cfg.get('speaker_grille')
+    if g:
+        gd, sp = g.get('diameter', 3.0), g.get('spacing', 5.0)
+        rows, cols = g.get('rows', 3), g.get('cols', 3)
+        ux, uy = R[:, 0], R[:, 1]
+        base = pos - open_dir * (size / 2.0)
+        cyls = []
+        for i in range(rows):
+            for j in range(cols):
+                off = ux * (i - (rows - 1) / 2.0) * sp + uy * (j - (cols - 1) / 2.0) * sp
+                cyls.append(cylinder_along(open_dir, gd / 2.0, 40.0, base + off - open_dir * 14.0))
+        body = body.difference(cyls, engine='manifold')
+
+    # friction cover, exported in assembled pose
+    cover_plate = oriented_box([size + 2 * lip - 0.4, size + 2 * lip - 0.4, seat_depth], R,
+                               surf - open_dir * (seat_depth / 2.0))
+    cover_plug = oriented_box([size - 0.4, size - 0.4, plug_depth], R,
+                              surf - open_dir * (seat_depth + plug_depth / 2.0))
+    cover = cover_plate.union(cover_plug, engine='manifold')
+    spk_d = cfg.get('speaker_back_diameter')
+    if spk_d:
+        cover = cover.difference(
+            cylinder_along(open_dir, spk_d / 2.0, seat_depth + plug_depth + 4.0,
+                           surf - open_dir * (seat_depth + plug_depth) / 2.0),
+            engine='manifold')
+
+    # post-carve verification with the same metric used for placement
+    walls = bay_metrics(body, pos, open_dir, R, size, lip, capsules or [])
+
+    info = {'type': 'hardware_bay', 'link': link_name, 'position': pos.tolist(),
+            'open_direction': open_dir.tolist(), 'size': size,
+            'surface': surf.round(2).tolist(), 'walls_mm': walls,
+            'cover_watertight': bool(cover.is_watertight),
+            'body_watertight': bool(body.is_watertight)}
+    return body, cover, info
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--parts-mm', required=True)
@@ -284,9 +487,31 @@ def main():
 
     report = []
     hole_registry = {}  # link_name -> list of (joint_pos, direction, depth, label)
+    hole_capsules = {}  # link_name -> list of (p1, p2, radius) for bay auto-placement
+
+    def register_capsule(link_name, entry, direction, depth, radius):
+        p1 = np.asarray(entry, dtype=float)
+        d = np.asarray(direction, dtype=float)
+        d /= np.linalg.norm(d)
+        hole_capsules.setdefault(link_name, []).append((p1, p1 + d * depth, radius, d))
 
     for cfg in plan:
-        jname, jtype = cfg['joint'], cfg['type']
+        jtype = cfg['type']
+
+        if jtype == 'hardware_bay':
+            link_name = cfg['link']
+            body, cover, info = hardware_bay(links[link_name], cfg, args.out_dir, link_name,
+                                             capsules=hole_capsules.get(link_name, []))
+            links[link_name] = body
+            cover_path = os.path.join(args.out_dir, f'{link_name}_hardware_cover.stl')
+            cover.export(cover_path)
+            report.append(info)
+            print(f'[hardware_bay] {link_name}: body watertight={info["body_watertight"]}, '
+                  f'cover watertight={info["cover_watertight"]}, walls {info["walls_mm"]}, '
+                  f'cover -> {cover_path}')
+            continue
+
+        jname = cfg['joint']
         parent_name, child_name = cfg['parent'], cfg['child']
         jpos = link_info[child_name]['joints'][jname]
 
@@ -306,6 +531,8 @@ def main():
             child, csurf = drill_magnet_hole(links[child_name], jpos, args.magnet_diameter,
                                              args.magnet_depth, direction=dir_child)
             links[parent_name], links[child_name] = parent, child
+            register_capsule(parent_name, psurf, -dir_child, args.magnet_depth, args.magnet_diameter / 2.0)
+            register_capsule(child_name, csurf, dir_child, args.magnet_depth, args.magnet_diameter / 2.0)
             report.append({'joint': jname, 'type': jtype,
                            'parent_surface': psurf.round(2).tolist(),
                            'child_surface': csurf.round(2).tolist()})
@@ -350,6 +577,9 @@ def main():
 
         hole_registry.setdefault(parent_name, []).append((surf_p, -dir_child, d_parent, f'{jname} (as parent)'))
         hole_registry.setdefault(child_name, []).append((surf_c, dir_child, d_child, f'{jname} (as child)'))
+        # peg hole groove is 9.0 mm wide: capsule radius 4.5 for bay clearance
+        register_capsule(parent_name, surf_p, -dir_child, d_parent, 4.5)
+        register_capsule(child_name, surf_c, dir_child, d_child, 4.5)
         entry = {'joint': jname, 'type': jtype, 'depth_parent': d_parent, 'depth_child': d_child,
                  'parent': {'link': parent_name, 'watertight': bool(parent.is_watertight),
                             'surface': surf_p.round(2).tolist()},

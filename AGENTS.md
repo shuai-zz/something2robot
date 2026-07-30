@@ -406,7 +406,7 @@ uv run python run_joints.py --model <model_name> --expected-x 100 \
 
 - Step 1: `run.py --connector-mode none` → `<out-dir>/parts_mm`
 - Step 2: `script/attach_joint_library.py` → `<out-dir>/parts_jointed`
-  (keyed snap-fit peg holes via `auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p20.stl`, magnet holes, entry relief, fragment cleanup, wall report)
+  (keyed snap-fit peg holes via `auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p30.stl`, magnet holes, entry relief, fragment cleanup, wall report)
 - `--reuse-decomposition` skips step 1 when `parts_mm` exists (attach alone is ~8 s).
 - Reproducibility: `<out-dir>/run_joints_report.json` records params, seed, git rev, timings.
 - Headless runs skip kaleido figure exports (`args.save_figures = False` in `run.py`; `script/auto_design.py` defaults it to `True` so interactive usage still gets `*_result.png`). This takes a mario decomposition from ~110 s to ~25 s.
@@ -433,6 +433,49 @@ Defaults: depth 11.5 mm (full cutter, snap groove flipped to the deep end);
 `axis` defaults to shared-joint → farthest other joint of the child link —
 override it when that heuristic is wrong (e.g. curved links, where the local
 segment direction should be used instead).
+
+### Hardware bay (`hardware_bay`) — implemented, deferred
+
+Machinery for embedding a cubic smart-hardware bay (default 29.8 mm +
+clearance) with a friction back cover and speaker holes exists in
+`script/attach_joint_library.py`:
+
+- `hardware_bay()`: carves cavity + opening channel + recessed cover seat,
+  exports `<LINK>_hardware_cover.stl` (plate + plug, optional center hole),
+  optional speaker grille on the opposite wall
+- `bay_metrics()`: wall-thickness scoring without carving (front wall grid,
+  lateral walls, AABB clearance to existing peg/magnet holes)
+- `find_bay_position()`: grid search over x/y/z maximizing the worst wall
+  thickness, used when a plan entry has `'position': 'auto'`
+
+**Status: disabled in the mario preset.** Physical constraint found on
+2026-07-28: at expected-x 100 mm the mario torso has **no clean spot** for a
+29.8³ mm cube + 34.6 mm cover frame —
+
+- above: neck magnet hole (z 18–22) and the torso tapering toward the neck
+  (front wall breaks through at z ≈ 10–16, the top-front corner pokes out)
+- below: hip peg holes (groove top z = −19.2, guide top −16.5) block moving
+  the cavity down
+- an exhaustive x∈[−2,2], y∈[0,8], z∈[−3,6] grid search found no candidate
+  with front wall > 0
+
+Options when this gets revisited (user decision pending):
+
+1. 3-sided cover seat (drop the top lip) + accept a ~1 mm slit at the
+   top-front corner and a <0.2 mm nick on hip hole corners
+2. scale the model up (expected-x 120 mm) so a clean spot appears
+3. tighter tolerances (clearance 0.2, lip 1 mm, compress the frame in z)
+
+To enable later, add to the model's plan JSON (preset or
+`<model>_joint_plan.json`):
+
+```json
+{"type": "hardware_bay", "link": "BODY",
+ "position": "auto", "open_direction": [0, 1, 0],
+ "size": 29.8, "clearance": 0.4, "seat_lip": 2.0, "seat_depth": 2.0,
+ "speaker_back_diameter": 6.0,
+ "speaker_grille": {"diameter": 3.0, "rows": 3, "cols": 3, "spacing": 5.0}}
+```
 
 ## Notes
 
