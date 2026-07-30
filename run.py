@@ -173,7 +173,7 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                hinge_axial_clearance=0.5, hinge_pin_diameter=3.0,
                hinge_root_length=5.0, hinge_angle_min=-45.0,
                hinge_angle_max=45.0, hinge_angle_step=5.0,
-               hinge_motion_clearance=0.5):
+               hinge_motion_clearance=0.5, hinge_motion_radius=15.0):
     args = AutoDesignArgs()
     args.stl_mesh_path = os.path.abspath(stl_path)
     args.joint_pkl_path = os.path.abspath(joints_path)
@@ -212,6 +212,7 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.hinge_angle_max = hinge_angle_max
     args.hinge_angle_step = hinge_angle_step
     args.hinge_motion_clearance = hinge_motion_clearance / 10.0
+    args.hinge_motion_radius = hinge_motion_radius / 10.0
     return args
 
 
@@ -378,6 +379,8 @@ def main():
     parser.add_argument('--hinge-angle-max', type=float, default=45.0)
     parser.add_argument('--hinge-angle-step', type=float, default=5.0)
     parser.add_argument('--hinge-motion-clearance', type=float, default=0.5)
+    parser.add_argument('--hinge-motion-radius', type=float, default=15.0,
+                        help='Radius of the local child motion envelope in mm')
     parser.add_argument('--magnet-diameter', type=float, default=6.0,
                         help='Magnet diameter in mm, used with --connector-mode magnet (default: 6.0)')
     parser.add_argument('--magnet-thickness', type=float, default=2.0,
@@ -415,6 +418,7 @@ def main():
             '--hinge-ear-thickness': args_cli.hinge_ear_thickness,
             '--hinge-pin-diameter': args_cli.hinge_pin_diameter,
             '--hinge-root-length': args_cli.hinge_root_length,
+            '--hinge-motion-radius': args_cli.hinge_motion_radius,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:
@@ -538,6 +542,7 @@ def main():
         hinge_angle_max=args_cli.hinge_angle_max,
         hinge_angle_step=args_cli.hinge_angle_step,
         hinge_motion_clearance=args_cli.hinge_motion_clearance,
+        hinge_motion_radius=args_cli.hinge_motion_radius,
     )
 
     design_start = time.time()

@@ -678,12 +678,18 @@ class Joint_Connect_Opt:
         angle_max = self.args.hinge_angle_max
         angle_step = self.args.hinge_angle_step
         motion_clearance = self.args.hinge_motion_clearance
+        motion_radius = self.args.hinge_motion_radius
         if min(ear, outer_radius, pin_radius, root_length) <= 0 or gap < 0:
             raise ValueError('hinge dimensions must be positive and clearance non-negative')
         if pin_radius + self.args.voxel_size * 0.5 >= outer_radius:
             raise ValueError('hinge pin hole leaves no printable ear wall')
 
         all_groups = list(self.mesh_decomp.mesh_group.link_value_dict.keys())
+        # Immutable silhouette constraint: replacement hinges may redistribute
+        # material between links but may never grow outside the original model.
+        original_occupied = (
+            self.mesh_decomp.mesh_group.voxel_data
+            != self.mesh_decomp.mesh_group.link_value_dict['Unoccupied'])
         generated = []
         queue = [self.mesh_decomp.link_tree]
         while queue:
@@ -732,6 +738,11 @@ class Joint_Connect_Opt:
                 radial = np.sqrt(childwise ** 2 + sideways ** 2)
                 return axial, childwise, sideways, radial
 
+            def inside_original(pts):
+                indices = self.mesh_decomp.mesh_group.position_to_index(pts)
+                return original_occupied[
+                    indices[:, 0], indices[:, 1], indices[:, 2]]
+
             def in_envelope(pts):
                 axial, _, _, radial = coordinates(pts)
                 return np.logical_and(
@@ -755,7 +766,7 @@ class Joint_Connect_Opt:
                     childwise <= 0,
                     childwise >= -root_length,
                     np.abs(sideways) <= outer_radius * 0.72))
-                return np.logical_or(ears, roots)
+                return np.logical_and(np.logical_or(ears, roots), inside_original(pts))
 
             def child_solid(pts):
                 axial, childwise, sideways, radial = coordinates(pts)
@@ -767,7 +778,8 @@ class Joint_Connect_Opt:
                     childwise >= 0,
                     childwise <= root_length,
                     np.abs(sideways) <= outer_radius * 0.72))
-                return np.logical_or(ear_center, root)
+                return np.logical_and(
+                    np.logical_or(ear_center, root), inside_original(pts))
 
             parent_added = self.mesh_decomp.mesh_group.move_voxels(
                 ['Unoccupied'], parent_name, parent_solid)
@@ -800,6 +812,12 @@ class Joint_Connect_Opt:
                 self.mesh_decomp.mesh_group.get_voxels(name)
                 for name in subtree_names
             ])
+            # Only the local knee volume shapes the relief. Farther portions
+            # of the lower leg and foot cannot intersect the upper leg near
+            # this joint and caused the previous "chewed surface" appearance.
+            subtree_voxels = subtree_voxels[
+                np.linalg.norm(subtree_voxels - center, axis=1) <= motion_radius
+            ]
 
             clearance_steps = int(np.ceil(
                 motion_clearance / self.args.voxel_size))
