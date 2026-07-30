@@ -444,6 +444,9 @@ to `0` for a clean rigid socket. Print a one-joint calibration coupon before
 applying the joint to a full model: FDM fit depends strongly on material,
 layer orientation, and printer calibration.
 
+`examples/mario_hidden_ball_joint_plan.json` is a printable starting point
+that replaces Mario's two hip PEG connections with recessed ball joints.
+
 Defaults: depth 11.5 mm (full cutter, snap groove flipped to the deep end);
 `axis` defaults to shared-joint → farthest other joint of the child link —
 override it when that heuristic is wrong (e.g. curved links, where the local

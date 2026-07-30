@@ -1,0 +1,26 @@
+[
+  {
+    "joint": "l_hip",
+    "type": "ball",
+    "parent": "BODY",
+    "child": "L_LEG",
+    "ball_diameter": 10.0,
+    "ball_clearance": 0.35,
+    "neck_diameter": 5.0,
+    "socket_mouth_ratio": 0.82,
+    "socket_embed": 3.75,
+    "relief_slot": 1.2
+  },
+  {
+    "joint": "r_hip",
+    "type": "ball",
+    "parent": "BODY",
+    "child": "R_LEG",
+    "ball_diameter": 10.0,
+    "ball_clearance": 0.35,
+    "neck_diameter": 5.0,
+    "socket_mouth_ratio": 0.82,
+    "socket_embed": 3.75,
+    "relief_slot": 1.2
+  }
+]
