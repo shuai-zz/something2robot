@@ -712,7 +712,13 @@ class Joint_Connect_Opt:
             side_dir /= np.linalg.norm(side_dir)
 
             half_span = 1.5 * ear + gap
-            envelope_radius = outer_radius + self.args.voxel_size
+            # Clear the original curved knee over the whole root length.  A
+            # small cylinder around the knuckles alone leaves the original
+            # parent/child cut surfaces touching outside the ears, which
+            # blocks rotation even though the pin geometry itself is valid.
+            envelope_radius = max(
+                outer_radius + self.args.voxel_size,
+                root_length + self.args.voxel_size)
 
             def coordinates(pts):
                 rel = pts - center
