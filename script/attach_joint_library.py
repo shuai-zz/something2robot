@@ -4,21 +4,22 @@ Joint plan: built-in presets (JOINT_PLANS below) or a JSON file per model —
 see load_joint_plan() for resolution order and the file format. To support a
 new model, add <model_stem>_joint_plan.json next to its _joints.pkl.
   neck                    -> blind magnet holes (default dia 9 x depth 4) on BODY and HEAD
-  hips / knees / ankles   -> keyed peg holes (snap-fit) on BOTH parent and child
+  hips / ankles           -> keyed peg holes (snap-fit) on BOTH parent and child
 
-Peg hole cutter: auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p20.stl
-  - axis along +Z, entry at z=0, snap groove at z=2.7..4.6, straight guide to z=11.5
+Peg hole cutter: auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p30.stl
+  - axis along +Z, entry at z=0 (small lip to z=-0.3), snap groove at z≈2.5..5,
+    straight guide to z=11.5
   - keyed anti-rotation flats are perpendicular to the cutter Y axis
-  - 0.2 mm clearance is already built into the cutter, use it directly for boolean
+  - 0.3 mm clearance is already built into the cutter, use it directly for boolean
 
 Placement rules:
   - hole axis = joint separation direction, drilled from the cut face INTO each link
     (parent gets the hole pointing away from the child and vice versa)
   - anti-rotation flats are kept parallel to the figure's chest/back plane
     (cutter Y axis mapped onto the model Y axis as closely as the hole axis allows)
-  - when one link receives two holes from opposite ends (e.g. lower legs), the
-    holes are shortened so a wall remains between them (see depth overrides and
-    the wall report printed at the end)
+  - when one link receives two holes from opposite ends, the holes can be
+    shortened via depth overrides so a wall remains between them (see the
+    wall report printed at the end)
 
 Positions: joint annotations are in source-STL units; parts_mm STLs are in
 millimetres. unit_scale = expected_x_mm / source_stl_x_extent converts them.
@@ -42,22 +43,21 @@ import trimesh
 JOINT_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', 'auto_design', 'model', 'joint_models')
 PEG_CUTTER_PATH = os.path.join(JOINT_MODELS_DIR, 'peg_joint',
-                               '7mm_keyed_peg_hole_cutter_clearance_0p20.stl')
+                               '7mm_keyed_peg_hole_cutter_clearance_0p30.stl')
 PEG_FULL_DEPTH = 11.5  # cutter spans z=0 (entry) .. z=11.5 (deep end)
 
 # Joint plans per model. depth_parent / depth_child override PEG_FULL_DEPTH.
 JOINT_PLANS = {
     'mario': [
-        {'joint': 'neck',    'type': 'magnet', 'parent': 'BODY',        'child': 'HEAD'},
-        {'joint': 'l_hip',   'type': 'peg',    'parent': 'BODY',        'child': 'L_LEG'},
-        {'joint': 'r_hip',   'type': 'peg',    'parent': 'BODY',        'child': 'R_LEG'},
-        # lower legs are only ~14 mm tall: shorten both their holes to keep a wall
-        {'joint': 'l_knee',  'type': 'peg',    'parent': 'L_LEG',       'child': 'L_LOWER_LEG', 'depth_child': 6.0},
-        {'joint': 'r_knee',  'type': 'peg',    'parent': 'R_LEG',       'child': 'R_LOWER_LEG', 'depth_child': 6.0},
+        {'joint': 'neck',    'type': 'magnet', 'parent': 'BODY',  'child': 'HEAD'},
+        {'joint': 'l_hip',   'type': 'peg',    'parent': 'BODY',  'child': 'L_LEG'},
+        {'joint': 'r_hip',   'type': 'peg',    'parent': 'BODY',  'child': 'R_LEG'},
+        # knees removed 2026-07-29: lower legs merged into L_LEG / R_LEG, so the
+        # leg now spans hip -> ankle; both ends take full-depth holes (wall ~17 mm)
         # ankles: drill straight down (vertical) instead of along the foot so the
         # peg can be inserted without interference
-        {'joint': 'l_ankle', 'type': 'peg',    'parent': 'L_LOWER_LEG', 'child': 'L_FOOT',      'depth_parent': 6.0, 'axis': [0, 0, -1]},
-        {'joint': 'r_ankle', 'type': 'peg',    'parent': 'R_LOWER_LEG', 'child': 'R_FOOT',      'depth_parent': 6.0, 'axis': [0, 0, -1]},
+        {'joint': 'l_ankle', 'type': 'peg',    'parent': 'L_LEG', 'child': 'L_FOOT', 'axis': [0, 0, -1]},
+        {'joint': 'r_ankle', 'type': 'peg',    'parent': 'R_LEG', 'child': 'R_FOOT', 'axis': [0, 0, -1]},
         # NOTE: hardware_bay for the 29.8 mm smart-hardware cube is implemented
         # but disabled — the 100 mm mario torso has no clean spot for it
         # (neck taper above, hip peg holes below). See AGENTS.md "Hardware bay".
@@ -124,11 +124,11 @@ def peg_cutter(direction, depth, flip=False):
     """Keyed peg hole cutter placed with its entry at the origin and its
     axis along `direction`, truncated to `depth` (capped).
 
-    The cutter's snap groove (the "big end", z=2.7..4.6 in library coords)
+    The cutter's snap groove (the "big end", z≈2.5..5 in library coords)
     sits near its z=0 end. For full-depth holes the groove must be at the
     DEEP end of the hole ("big end toward the model interior"): flip the
     cutter so the smooth guide enters first and the groove lands at
-    z=6.9..8.8. Short holes (depth overrides) keep the groove within the
+    z≈6.5..9. Short holes (depth overrides) keep the groove within the
     shallow hole and are used unflipped.
     """
     cutter = trimesh.load(PEG_CUTTER_PATH)
@@ -577,9 +577,9 @@ def main():
 
         hole_registry.setdefault(parent_name, []).append((surf_p, -dir_child, d_parent, f'{jname} (as parent)'))
         hole_registry.setdefault(child_name, []).append((surf_c, dir_child, d_child, f'{jname} (as child)'))
-        # peg hole groove is 8.8 mm wide: capsule radius 4.4 for bay clearance
-        register_capsule(parent_name, surf_p, -dir_child, d_parent, 4.4)
-        register_capsule(child_name, surf_c, dir_child, d_child, 4.4)
+        # peg hole groove is 9.0 mm wide: capsule radius 4.5 for bay clearance
+        register_capsule(parent_name, surf_p, -dir_child, d_parent, 4.5)
+        register_capsule(child_name, surf_c, dir_child, d_child, 4.5)
         entry = {'joint': jname, 'type': jtype, 'depth_parent': d_parent, 'depth_child': d_child,
                  'parent': {'link': parent_name, 'watertight': bool(parent.is_watertight),
                             'surface': surf_p.round(2).tolist()},
