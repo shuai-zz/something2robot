@@ -360,6 +360,25 @@ def _export_voxel_hinge_pins(args_cli, out_dir):
     return files
 
 
+def _remove_degenerate_stl_faces(folder):
+    """Remove zero-area marching-cubes faces without changing real geometry."""
+    import trimesh
+    cleaned = []
+    for filename in sorted(os.listdir(folder)):
+        if not filename.lower().endswith('.stl'):
+            continue
+        path = os.path.join(folder, filename)
+        mesh = trimesh.load_mesh(path, process=True)
+        keep = mesh.nondegenerate_faces()
+        removed = int(len(mesh.faces) - int(keep.sum()))
+        if removed:
+            mesh.update_faces(keep)
+            mesh.remove_unreferenced_vertices()
+            mesh.export(path)
+            cleaned.append({'file': filename, 'removed_faces': removed})
+    return cleaned
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Single agent-friendly entry point for something2robot.'
@@ -656,8 +675,11 @@ def main():
     parts_mm_folder = os.path.join(out_dir, 'parts_mm')
     try:
         exported_mm = export_urdf_folder_to_mm(parts_folder, parts_mm_folder, 1000.0)
+        degenerate_cleanup = _remove_degenerate_stl_faces(parts_mm_folder)
         report['paths']['parts_mm_folder'] = parts_mm_folder
         report['parts_mm_stl_files'] = exported_mm
+        if degenerate_cleanup:
+            report['degenerate_face_cleanup'] = degenerate_cleanup
     except Exception as e:
         report['notes'].append(f"export_stl_to_mm failed: {e}")
 
