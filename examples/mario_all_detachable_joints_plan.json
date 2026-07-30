@@ -1,0 +1,54 @@
+[
+  {
+    "joint": "neck",
+    "type": "pin",
+    "parent": "BODY",
+    "child": "HEAD",
+    "pin_diameter": 3.0,
+    "pin_clearance": 0.2,
+    "depth_parent": 6.0,
+    "depth_child": 6.0
+  },
+  {
+    "joint": "l_hip",
+    "type": "ball",
+    "parent": "BODY",
+    "child": "L_LEG"
+  },
+  {
+    "joint": "r_hip",
+    "type": "ball",
+    "parent": "BODY",
+    "child": "R_LEG"
+  },
+  {
+    "joint": "l_knee",
+    "type": "hinge",
+    "parent": "L_LEG",
+    "child": "L_LOWER_LEG",
+    "depth_child": 6.0
+  },
+  {
+    "joint": "r_knee",
+    "type": "hinge",
+    "parent": "R_LEG",
+    "child": "R_LOWER_LEG",
+    "depth_child": 6.0
+  },
+  {
+    "joint": "l_ankle",
+    "type": "hinge",
+    "parent": "L_LOWER_LEG",
+    "child": "L_FOOT",
+    "depth_parent": 6.0,
+    "axis": [0, 0, -1]
+  },
+  {
+    "joint": "r_ankle",
+    "type": "hinge",
+    "parent": "R_LOWER_LEG",
+    "child": "R_FOOT",
+    "depth_parent": 6.0,
+    "axis": [0, 0, -1]
+  }
+]
