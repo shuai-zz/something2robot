@@ -374,8 +374,23 @@ def _remove_degenerate_stl_faces(folder):
         if removed:
             mesh.update_faces(keep)
             mesh.remove_unreferenced_vertices()
+        components = mesh.split(only_watertight=False)
+        artifact_components = 0
+        if len(components) > 1:
+            components = sorted(components, key=lambda item: len(item.faces),
+                                reverse=True)
+            extras = components[1:]
+            if all(len(item.faces) <= 4 or abs(float(item.volume)) < 1e-9
+                   for item in extras):
+                mesh = components[0]
+                artifact_components = len(extras)
+        if removed or artifact_components:
             mesh.export(path)
-            cleaned.append({'file': filename, 'removed_faces': removed})
+            cleaned.append({
+                'file': filename,
+                'removed_faces': removed,
+                'removed_zero_volume_components': artifact_components,
+            })
     return cleaned
 
 
