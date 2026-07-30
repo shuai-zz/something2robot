@@ -429,6 +429,21 @@ Plan JSON format:
   "depth_parent": 11.5, "depth_child": 6.0, "axis": [0, 0, -1]}]
 ```
 
+For a clay-doll-style detachable joint, use `type: "ball"`:
+
+```json
+{"joint": "l_shoulder", "type": "ball", "parent": "BODY", "child": "L_ARM",
+ "ball_diameter": 10.0, "ball_clearance": 0.35, "neck_diameter": 5.0,
+ "socket_mouth_ratio": 0.82, "socket_embed": 3.75, "relief_slot": 1.2}
+```
+
+The child receives a ball stud and the parent receives a recessed spherical
+socket. The recessed center hides most of the connector in the assembled
+silhouette. `relief_slot` creates flexible socket jaws for PETG/nylon; set it
+to `0` for a clean rigid socket. Print a one-joint calibration coupon before
+applying the joint to a full model: FDM fit depends strongly on material,
+layer orientation, and printer calibration.
+
 Defaults: depth 11.5 mm (full cutter, snap groove flipped to the deep end);
 `axis` defaults to shared-joint → farthest other joint of the child link —
 override it when that heuristic is wrong (e.g. curved links, where the local

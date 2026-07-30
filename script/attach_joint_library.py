@@ -1,10 +1,11 @@
-"""Carve snap-fit peg holes and magnet holes into decomposed link STLs.
+"""Attach printable, detachable joints to decomposed link STLs.
 
 Joint plan: built-in presets (JOINT_PLANS below) or a JSON file per model —
 see load_joint_plan() for resolution order and the file format. To support a
 new model, add <model_stem>_joint_plan.json next to its _joints.pkl.
-  neck                    -> blind magnet holes (default dia 9 x depth 4) on BODY and HEAD
-  hips / ankles           -> keyed peg holes (snap-fit) on BOTH parent and child
+  magnet -> blind magnet holes on both links
+  peg    -> keyed peg holes on both links
+  ball   -> a recessed snap-fit ball stud on the child and socket in the parent
 
 Peg hole cutter: auto_design/model/joint_models/peg_joint/7mm_keyed_peg_hole_cutter_clearance_0p30.stl
   - axis along +Z, entry at z=0 (small lip to z=-0.3), snap groove at z≈2.5..5,
@@ -216,9 +217,12 @@ def load_joint_plan(value, joints_pkl):
       [{"joint": "neck",  "type": "magnet", "parent": "BODY", "child": "HEAD"},
        {"joint": "l_hip", "type": "peg", "parent": "BODY", "child": "L_LEG",
         "depth_child": 6.0, "axis": [0, 0, -1]}]
-    Keys: joint (annotation name), type (peg|magnet), parent, child,
+    Keys: joint (annotation name), type (peg|magnet|ball), parent, child,
     optional depth_parent / depth_child (mm, default 11.5), axis (direction
     override, default: shared joint -> farthest other joint of the child).
+    Ball joints additionally accept ball_diameter, ball_clearance,
+    neck_diameter, socket_mouth_ratio, socket_embed, and relief_slot (all
+    dimensions in mm).
     """
     if value and os.path.isfile(value):
         with open(value) as f:
@@ -278,6 +282,90 @@ def cylinder_along(direction, radius, height, center):
         c.apply_transform(t)
     c.apply_translation(center)
     return c
+
+
+def hidden_ball_joint(parent_mesh, child_mesh, parent_surface, child_surface,
+                      direction_into_child, cfg):
+    """Build a recessed, detachable ball joint.
+
+    The ball and its neck are unioned to the child.  A matching spherical
+    cavity and smaller retaining mouth are carved into the parent.  The ball
+    center is recessed behind the parent cut face so the assembled joint shows
+    only a small spherical cap instead of a PEG-like connector shaft.
+
+    A narrow spring slot through the socket mouth is enabled by default.  It
+    lets PETG/nylon socket jaws flex during insertion; set ``relief_slot`` to
+    0 for a clean rigid socket or when the parent material is already flexible.
+    """
+    d_child = np.asarray(direction_into_child, dtype=float)
+    d_child /= np.linalg.norm(d_child)
+    d_parent = -d_child
+
+    diameter = float(cfg.get('ball_diameter', 10.0))
+    radius = diameter / 2.0
+    clearance = float(cfg.get('ball_clearance', 0.35))
+    neck_diameter = float(cfg.get('neck_diameter', diameter * 0.5))
+    mouth_ratio = float(cfg.get('socket_mouth_ratio', 0.82))
+    embed = float(cfg.get('socket_embed', radius * 0.75))
+    relief_slot = float(cfg.get('relief_slot', 1.2))
+
+    if diameter <= 0 or clearance < 0 or neck_diameter <= 0:
+        raise ValueError('ball_diameter and neck_diameter must be positive; '
+                         'ball_clearance must be non-negative')
+    if not 0.55 <= mouth_ratio < 1.0:
+        raise ValueError('socket_mouth_ratio must be in [0.55, 1.0)')
+    if embed <= 0:
+        raise ValueError('socket_embed must be positive')
+
+    ball_center = np.asarray(parent_surface, dtype=float) + d_parent * embed
+    ball = trimesh.creation.icosphere(subdivisions=3, radius=radius)
+    ball.apply_translation(ball_center)
+
+    # Start the neck slightly inside the child to guarantee a robust union
+    # even when the decomposed cut surfaces do not coincide perfectly.
+    neck_start = np.asarray(child_surface, dtype=float) + d_child * 0.8
+    neck_vec = ball_center - neck_start
+    neck_length = float(np.linalg.norm(neck_vec))
+    if neck_length < 0.5:
+        raise ValueError('ball joint neck is too short; check joint axis/surfaces')
+    neck = cylinder_along(neck_vec, neck_diameter / 2.0,
+                          neck_length + 1.0,
+                          (neck_start + ball_center) / 2.0)
+    child = child_mesh.union([neck, ball], engine='manifold')
+
+    cavity = trimesh.creation.icosphere(
+        subdivisions=3, radius=radius + clearance)
+    cavity.apply_translation(ball_center)
+
+    mouth_radius = max(neck_diameter / 2.0 + clearance,
+                       radius * mouth_ratio)
+    mouth_length = embed + radius + 4.0
+    mouth_center = np.asarray(parent_surface, dtype=float) - d_parent * (
+        (mouth_length - embed) / 2.0)
+    mouth = cylinder_along(d_parent, mouth_radius, mouth_length, mouth_center)
+    cutters = [cavity, mouth]
+
+    if relief_slot > 0:
+        rot = rotation_with_axis(d_parent)
+        slot_depth = embed + radius + 3.0
+        slot_center = np.asarray(parent_surface, dtype=float) + d_parent * (
+            (slot_depth - 2.0) / 2.0)
+        slot = oriented_box(
+            [relief_slot, 2.0 * (radius + clearance + 2.0), slot_depth + 2.0],
+            rot, slot_center)
+        cutters.append(slot)
+
+    parent = parent_mesh.difference(cutters, engine='manifold')
+    info = {
+        'ball_diameter': diameter,
+        'ball_clearance': clearance,
+        'neck_diameter': neck_diameter,
+        'socket_mouth_ratio': mouth_ratio,
+        'socket_embed': embed,
+        'relief_slot': relief_slot,
+        'ball_center': ball_center.round(3).tolist(),
+    }
+    return parent, child, info
 
 
 def bay_metrics(mesh, pos, open_dir, R, size, lip, capsules):
@@ -538,6 +626,39 @@ def main():
                            'child_surface': csurf.round(2).tolist()})
             print(f'[magnet] {jname}: parent surface {psurf.round(2)}, child surface {csurf.round(2)}')
             continue
+
+        if jtype == 'ball':
+            surf_p = ray_surface(links[parent_name], jpos, dir_child)
+            surf_c = ray_surface(links[child_name], jpos, -dir_child)
+            parent, child, ball_info = hidden_ball_joint(
+                links[parent_name], links[child_name],
+                surf_p, surf_c, dir_child, cfg)
+            links[parent_name], links[child_name] = parent, child
+            report.append({
+                'joint': jname,
+                'type': jtype,
+                'parent': {
+                    'link': parent_name,
+                    'watertight': bool(parent.is_watertight),
+                    'surface': surf_p.round(2).tolist(),
+                },
+                'child': {
+                    'link': child_name,
+                    'watertight': bool(child.is_watertight),
+                    'surface': surf_c.round(2).tolist(),
+                },
+                **ball_info,
+            })
+            print(f'[ball] {jname}: {parent_name} socket '
+                  f'watertight={parent.is_watertight}, {child_name} stud '
+                  f'watertight={child.is_watertight}, center '
+                  f'{np.asarray(ball_info["ball_center"]).round(2)}')
+            continue
+
+        if jtype != 'peg':
+            raise ValueError(
+                f"unsupported joint type {jtype!r} for joint {jname!r}; "
+                "expected peg, magnet, ball, or hardware_bay")
 
         # peg holes on both parent and child.
         # The hole must open at the link's ACTUAL cut face, which is not
