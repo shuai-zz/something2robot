@@ -171,7 +171,9 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                cut_plane_direction='rotation-axis', hinge_joints='l_knee,r_knee',
                hinge_outer_diameter=10.0, hinge_ear_thickness=3.0,
                hinge_axial_clearance=0.5, hinge_pin_diameter=3.0,
-               hinge_root_length=5.0):
+               hinge_root_length=5.0, hinge_angle_min=-45.0,
+               hinge_angle_max=45.0, hinge_angle_step=5.0,
+               hinge_motion_clearance=0.5):
     args = AutoDesignArgs()
     args.stl_mesh_path = os.path.abspath(stl_path)
     args.joint_pkl_path = os.path.abspath(joints_path)
@@ -206,6 +208,10 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.hinge_axial_clearance = hinge_axial_clearance / 10.0
     args.hinge_pin_diameter = hinge_pin_diameter / 10.0
     args.hinge_root_length = hinge_root_length / 10.0
+    args.hinge_angle_min = hinge_angle_min
+    args.hinge_angle_max = hinge_angle_max
+    args.hinge_angle_step = hinge_angle_step
+    args.hinge_motion_clearance = hinge_motion_clearance / 10.0
     return args
 
 
@@ -368,6 +374,10 @@ def main():
     parser.add_argument('--hinge-axial-clearance', type=float, default=0.5)
     parser.add_argument('--hinge-pin-diameter', type=float, default=3.0)
     parser.add_argument('--hinge-root-length', type=float, default=5.0)
+    parser.add_argument('--hinge-angle-min', type=float, default=-45.0)
+    parser.add_argument('--hinge-angle-max', type=float, default=45.0)
+    parser.add_argument('--hinge-angle-step', type=float, default=5.0)
+    parser.add_argument('--hinge-motion-clearance', type=float, default=0.5)
     parser.add_argument('--magnet-diameter', type=float, default=6.0,
                         help='Magnet diameter in mm, used with --connector-mode magnet (default: 6.0)')
     parser.add_argument('--magnet-thickness', type=float, default=2.0,
@@ -411,6 +421,12 @@ def main():
             parser.error(', '.join(invalid) + ' must be positive')
         if args_cli.hinge_axial_clearance < 0:
             parser.error('--hinge-axial-clearance cannot be negative')
+        if args_cli.hinge_motion_clearance < 0:
+            parser.error('--hinge-motion-clearance cannot be negative')
+        if args_cli.hinge_angle_min >= args_cli.hinge_angle_max:
+            parser.error('--hinge-angle-min must be less than --hinge-angle-max')
+        if args_cli.hinge_angle_step <= 0:
+            parser.error('--hinge-angle-step must be positive')
     if args_cli.connector_mode == 'tenon':
         positive = {
             '--tenon-radius': args_cli.tenon_radius,
@@ -518,6 +534,10 @@ def main():
         hinge_axial_clearance=args_cli.hinge_axial_clearance,
         hinge_pin_diameter=args_cli.hinge_pin_diameter,
         hinge_root_length=args_cli.hinge_root_length,
+        hinge_angle_min=args_cli.hinge_angle_min,
+        hinge_angle_max=args_cli.hinge_angle_max,
+        hinge_angle_step=args_cli.hinge_angle_step,
+        hinge_motion_clearance=args_cli.hinge_motion_clearance,
     )
 
     design_start = time.time()

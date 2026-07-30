@@ -674,6 +674,10 @@ class Joint_Connect_Opt:
         outer_radius = self.args.hinge_outer_diameter / 2.0
         pin_radius = self.args.hinge_pin_diameter / 2.0
         root_length = self.args.hinge_root_length
+        angle_min = self.args.hinge_angle_min
+        angle_max = self.args.hinge_angle_max
+        angle_step = self.args.hinge_angle_step
+        motion_clearance = self.args.hinge_motion_clearance
         if min(ear, outer_radius, pin_radius, root_length) <= 0 or gap < 0:
             raise ValueError('hinge dimensions must be positive and clearance non-negative')
         if pin_radius + self.args.voxel_size * 0.5 >= outer_radius:
@@ -778,6 +782,72 @@ class Joint_Connect_Opt:
 
             self.mesh_decomp.mesh_group.move_voxels(
                 [parent_name, link.name], 'Unoccupied', pin_bore)
+
+            # Rotate the complete child subtree through the requested motion
+            # range and clear every static voxel touched by that sweep.  This
+            # is the voxel-native equivalent of motion-envelope subtraction.
+            subtree_names = []
+            subtree_queue = [node]
+            while subtree_queue:
+                subtree_node = subtree_queue.pop(0)
+                subtree_queue.extend(subtree_node.children)
+                subtree_names.append(subtree_node.val.name)
+            subtree_values = {
+                self.mesh_decomp.mesh_group.link_value_dict[name]
+                for name in subtree_names
+            }
+            subtree_voxels = np.vstack([
+                self.mesh_decomp.mesh_group.get_voxels(name)
+                for name in subtree_names
+            ])
+
+            clearance_steps = int(np.ceil(
+                motion_clearance / self.args.voxel_size))
+            offsets = []
+            for ix in range(-clearance_steps, clearance_steps + 1):
+                for iy in range(-clearance_steps, clearance_steps + 1):
+                    for iz in range(-clearance_steps, clearance_steps + 1):
+                        if ix * ix + iy * iy + iz * iz <= clearance_steps ** 2:
+                            offsets.append((ix, iy, iz))
+            offsets = np.asarray(offsets, dtype=int)
+
+            ranges = [
+                self.mesh_decomp.mesh_group.x_range,
+                self.mesh_decomp.mesh_group.y_range,
+                self.mesh_decomp.mesh_group.z_range,
+            ]
+            shape = np.asarray(self.mesh_decomp.mesh_group.voxel_data.shape)
+            cleared_indices = []
+            for angle_deg in np.arange(
+                    angle_min, angle_max + angle_step * 0.5, angle_step):
+                theta = np.deg2rad(angle_deg)
+                rel = subtree_voxels - center
+                rotated = (
+                    rel * np.cos(theta)
+                    + np.cross(axis, rel) * np.sin(theta)
+                    + axis * np.dot(rel, axis)[:, None] * (1.0 - np.cos(theta))
+                    + center)
+                indices = self.mesh_decomp.mesh_group.position_to_index(rotated)
+                indices = (indices[:, None, :] + offsets[None, :, :]).reshape(-1, 3)
+                valid = np.all((indices >= 0) & (indices < shape), axis=1)
+                indices = np.unique(indices[valid], axis=0)
+                values = self.mesh_decomp.mesh_group.voxel_data[
+                    indices[:, 0], indices[:, 1], indices[:, 2]]
+                static = np.logical_and(
+                    values != self.mesh_decomp.mesh_group.link_value_dict['Unoccupied'],
+                    ~np.isin(values, list(subtree_values)))
+                cleared_indices.append(indices[static])
+
+            if cleared_indices:
+                cleared_indices = np.unique(np.vstack(cleared_indices), axis=0)
+                self.mesh_decomp.mesh_group.voxel_data[
+                    cleared_indices[:, 0],
+                    cleared_indices[:, 1],
+                    cleared_indices[:, 2]] = self.mesh_decomp.mesh_group.link_value_dict['Unoccupied']
+                print(
+                    f'Voxel hinge {joint_name}: motion sweep cleared '
+                    f'{len(cleared_indices)} static voxels over '
+                    f'{angle_min}..{angle_max} degrees')
 
             protected = np.vstack((parent_added, child_added))
             if len(protected):
