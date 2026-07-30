@@ -172,6 +172,9 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
             joint_connect_opt.add_voxel_hinges()
         elif connector_mode == 'voxel-ball':
             joint_connect_opt.add_voxel_ball_joints()
+        elif connector_mode == 'voxel-hybrid':
+            joint_connect_opt.add_voxel_ball_joints()
+            joint_connect_opt.add_voxel_hinges()
         refine_end_time = time.time()
 
         # Log the number of voxels after the joint connection and show the result

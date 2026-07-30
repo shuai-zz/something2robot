@@ -679,6 +679,8 @@ class Joint_Connect_Opt:
         angle_step = self.args.hinge_angle_step
         motion_clearance = self.args.hinge_motion_clearance
         motion_radius = self.args.hinge_motion_radius
+        detent_radius = getattr(self.args, 'hinge_detent_radius', 0.0)
+        detent_clearance = getattr(self.args, 'hinge_detent_clearance', 0.0)
         axis_override_text = getattr(self.args, 'hinge_axis_override', None)
         axis_override = None
         if axis_override_text:
@@ -807,6 +809,40 @@ class Joint_Connect_Opt:
             self.mesh_decomp.mesh_group.move_voxels(
                 [parent_name, link.name], 'Unoccupied', pin_bore)
 
+            if detent_radius > 0:
+                # A bump on each side of the child ear seats in a matching
+                # parent pocket at the neutral angle.  The child bump overlaps
+                # the ear so it is printed as part of the moving link.
+                detent_radial = outer_radius * 0.62
+                detent_centers = [
+                    center + child_dir * detent_radial
+                    + axis * sign * (ear / 2.0 + detent_radius * 0.45)
+                    for sign in (-1.0, 1.0)
+                ]
+
+                def child_detents(pts):
+                    return np.any(np.column_stack([
+                        np.linalg.norm(pts - detent_center, axis=1)
+                        <= detent_radius
+                        for detent_center in detent_centers
+                    ]), axis=1)
+
+                detent_added = self.mesh_decomp.mesh_group.move_voxels(
+                    ['Unoccupied'], link.name, child_detents)
+
+                def detent_pockets(pts):
+                    pocket_radius = detent_radius + detent_clearance
+                    return np.any(np.column_stack([
+                        np.linalg.norm(pts - detent_center, axis=1)
+                        <= pocket_radius
+                        for detent_center in detent_centers
+                    ]), axis=1)
+
+                self.mesh_decomp.mesh_group.move_voxels(
+                    [parent_name], 'Unoccupied', detent_pockets)
+                if len(detent_added):
+                    child_added = np.vstack((child_added, detent_added))
+
             # Rotate the complete child subtree through the requested motion
             # range and clear every static voxel touched by that sweep.  This
             # is the voxel-native equivalent of motion-envelope subtraction.
@@ -830,6 +866,13 @@ class Joint_Connect_Opt:
             subtree_voxels = subtree_voxels[
                 np.linalg.norm(subtree_voxels - center, axis=1) <= motion_radius
             ]
+            if detent_radius > 0:
+                is_detent = np.any(np.column_stack([
+                    np.linalg.norm(subtree_voxels - detent_center, axis=1)
+                    <= detent_radius + self.args.voxel_size
+                    for detent_center in detent_centers
+                ]), axis=1)
+                subtree_voxels = subtree_voxels[~is_detent]
 
             clearance_steps = int(np.ceil(
                 motion_clearance / self.args.voxel_size))
@@ -937,7 +980,8 @@ class Joint_Connect_Opt:
             # Mirror the insertion direction so each stud points out of its
             # corresponding side of BODY.
             insert_dir = base_axis.copy()
-            if joint_name.lower().startswith('r_'):
+            joint_lower = joint_name.lower()
+            if joint_lower.startswith('r_') or joint_lower.startswith('right'):
                 insert_dir *= -1.0
             other_points = np.asarray(
                 [point for name, point in link.joints.items() if name != joint_name],

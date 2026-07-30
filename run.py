@@ -174,7 +174,8 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                hinge_root_length=5.0, hinge_angle_min=-45.0,
                hinge_angle_max=45.0, hinge_angle_step=5.0,
                hinge_motion_clearance=0.5, hinge_motion_radius=15.0,
-               hinge_axis_override=None, ball_joints='l_hip,r_hip',
+               hinge_axis_override=None, hinge_detent_radius=0.0,
+               hinge_detent_clearance=0.3, ball_joints='l_hip,r_hip',
                ball_axis='0,1,0', ball_diameter=11.0,
                ball_clearance=0.5, ball_socket_wall=2.0,
                ball_neck_diameter=4.0, ball_neck_length=4.0,
@@ -219,6 +220,8 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.hinge_motion_clearance = hinge_motion_clearance / 10.0
     args.hinge_motion_radius = hinge_motion_radius / 10.0
     args.hinge_axis_override = hinge_axis_override
+    args.hinge_detent_radius = hinge_detent_radius / 10.0
+    args.hinge_detent_clearance = hinge_detent_clearance / 10.0
     args.ball_joints = ball_joints
     args.ball_axis = ball_axis
     args.ball_diameter = ball_diameter / 10.0
@@ -381,7 +384,7 @@ def main():
                         help='Repair disconnected STL links by keeping largest component')
     parser.add_argument('--skip-motors', action='store_true',
                         help='Skip motor visualization export')
-    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'tenon', 'voxel-hinge', 'voxel-ball', 'none'), default='motor',
+    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'tenon', 'voxel-hinge', 'voxel-ball', 'voxel-hybrid', 'none'), default='motor',
                         help='Joint interface: motor, experimental magnet, fitted coaxial tenon, or plain split')
     parser.add_argument('--hinge-joints', default='l_knee,r_knee',
                         help='Comma-separated joint names for voxel-hinge mode')
@@ -398,6 +401,10 @@ def main():
                         help='Radius of the local child motion envelope in mm')
     parser.add_argument('--hinge-axis-override', default=None,
                         help='Global hinge/pin axis as x,y,z; e.g. 0,1,0')
+    parser.add_argument('--hinge-detent-radius', type=float, default=0.0,
+                        help='Radius in mm of two neutral-position locking pegs')
+    parser.add_argument('--hinge-detent-clearance', type=float, default=0.3,
+                        help='Radial clearance around hinge detent pockets in mm')
     parser.add_argument('--ball-joints', default='l_hip,r_hip')
     parser.add_argument('--ball-axis', default='0,1,0',
                         help='Insertion direction before left/right mirroring')
@@ -439,7 +446,7 @@ def main():
             parser.error('--magnet-diameter and --magnet-thickness must be positive')
         if args_cli.magnet_clearance < 0:
             parser.error('--magnet-clearance cannot be negative')
-    if args_cli.connector_mode == 'voxel-hinge':
+    if args_cli.connector_mode in ('voxel-hinge', 'voxel-hybrid'):
         positive = {
             '--hinge-outer-diameter': args_cli.hinge_outer_diameter,
             '--hinge-ear-thickness': args_cli.hinge_ear_thickness,
@@ -454,11 +461,13 @@ def main():
             parser.error('--hinge-axial-clearance cannot be negative')
         if args_cli.hinge_motion_clearance < 0:
             parser.error('--hinge-motion-clearance cannot be negative')
+        if args_cli.hinge_detent_radius < 0 or args_cli.hinge_detent_clearance < 0:
+            parser.error('hinge detent radius and clearance cannot be negative')
         if args_cli.hinge_angle_min >= args_cli.hinge_angle_max:
             parser.error('--hinge-angle-min must be less than --hinge-angle-max')
         if args_cli.hinge_angle_step <= 0:
             parser.error('--hinge-angle-step must be positive')
-    if args_cli.connector_mode == 'voxel-ball':
+    if args_cli.connector_mode in ('voxel-ball', 'voxel-hybrid'):
         ball_positive = {
             '--ball-diameter': args_cli.ball_diameter,
             '--ball-socket-wall': args_cli.ball_socket_wall,
@@ -586,6 +595,8 @@ def main():
         hinge_motion_clearance=args_cli.hinge_motion_clearance,
         hinge_motion_radius=args_cli.hinge_motion_radius,
         hinge_axis_override=args_cli.hinge_axis_override,
+        hinge_detent_radius=args_cli.hinge_detent_radius,
+        hinge_detent_clearance=args_cli.hinge_detent_clearance,
         ball_joints=args_cli.ball_joints,
         ball_axis=args_cli.ball_axis,
         ball_diameter=args_cli.ball_diameter,
@@ -650,7 +661,7 @@ def main():
     except Exception as e:
         report['notes'].append(f"export_stl_to_mm failed: {e}")
 
-    if args_cli.connector_mode == 'voxel-hinge':
+    if args_cli.connector_mode in ('voxel-hinge', 'voxel-hybrid'):
         try:
             pin_files = _export_voxel_hinge_pins(args_cli, out_dir)
             report['paths']['hinge_pins_folder'] = os.path.dirname(pin_files[0])
