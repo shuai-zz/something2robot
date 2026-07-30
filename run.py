@@ -173,7 +173,8 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                hinge_axial_clearance=0.5, hinge_pin_diameter=3.0,
                hinge_root_length=5.0, hinge_angle_min=-45.0,
                hinge_angle_max=45.0, hinge_angle_step=5.0,
-               hinge_motion_clearance=0.5, hinge_motion_radius=15.0):
+               hinge_motion_clearance=0.5, hinge_motion_radius=15.0,
+               hinge_axis_override=None):
     args = AutoDesignArgs()
     args.stl_mesh_path = os.path.abspath(stl_path)
     args.joint_pkl_path = os.path.abspath(joints_path)
@@ -213,6 +214,7 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.hinge_angle_step = hinge_angle_step
     args.hinge_motion_clearance = hinge_motion_clearance / 10.0
     args.hinge_motion_radius = hinge_motion_radius / 10.0
+    args.hinge_axis_override = hinge_axis_override
     return args
 
 
@@ -381,6 +383,8 @@ def main():
     parser.add_argument('--hinge-motion-clearance', type=float, default=0.5)
     parser.add_argument('--hinge-motion-radius', type=float, default=15.0,
                         help='Radius of the local child motion envelope in mm')
+    parser.add_argument('--hinge-axis-override', default=None,
+                        help='Global hinge/pin axis as x,y,z; e.g. 0,1,0')
     parser.add_argument('--magnet-diameter', type=float, default=6.0,
                         help='Magnet diameter in mm, used with --connector-mode magnet (default: 6.0)')
     parser.add_argument('--magnet-thickness', type=float, default=2.0,
@@ -543,6 +547,7 @@ def main():
         hinge_angle_step=args_cli.hinge_angle_step,
         hinge_motion_clearance=args_cli.hinge_motion_clearance,
         hinge_motion_radius=args_cli.hinge_motion_radius,
+        hinge_axis_override=args_cli.hinge_axis_override,
     )
 
     design_start = time.time()

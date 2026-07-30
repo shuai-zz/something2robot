@@ -679,6 +679,15 @@ class Joint_Connect_Opt:
         angle_step = self.args.hinge_angle_step
         motion_clearance = self.args.hinge_motion_clearance
         motion_radius = self.args.hinge_motion_radius
+        axis_override_text = getattr(self.args, 'hinge_axis_override', None)
+        axis_override = None
+        if axis_override_text:
+            axis_override = np.asarray(
+                [float(value) for value in axis_override_text.split(',')],
+                dtype=float)
+            if axis_override.shape != (3,) or np.linalg.norm(axis_override) == 0:
+                raise ValueError('hinge_axis_override must be three non-zero comma-separated values')
+            axis_override /= np.linalg.norm(axis_override)
         if min(ear, outer_radius, pin_radius, root_length) <= 0 or gap < 0:
             raise ValueError('hinge dimensions must be positive and clearance non-negative')
         if pin_radius + self.args.voxel_size * 0.5 >= outer_radius:
@@ -696,7 +705,7 @@ class Joint_Connect_Opt:
             node = queue.pop(0)
             queue.extend(node.children)
             link = node.val
-            if link.axis is None or len(link.axis) != 2:
+            if link.axis is None or len(link.axis) < 2:
                 continue
             parent_name = self.father_dict.get(link.name)
             if parent_name is None:
@@ -708,7 +717,10 @@ class Joint_Connect_Opt:
 
             joint_name = shared[0]
             center = np.asarray(link.joints[joint_name], dtype=float)
-            axis = np.asarray(link.axis[1], dtype=float)
+            if len(link.axis) != 2 and axis_override is None:
+                continue
+            axis = (axis_override.copy() if axis_override is not None
+                    else np.asarray(link.axis[1], dtype=float))
             axis /= np.linalg.norm(axis)
             other_points = np.asarray(
                 [point for name, point in link.joints.items() if name != joint_name],
