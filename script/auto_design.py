@@ -168,6 +168,8 @@ def design_one_round(args, mesh_loader, round, log, round_result_saving_folder, 
             joint_connect_opt.run_opt()
         elif connector_mode == 'magnet':
             joint_connect_opt.add_magnet_pockets()
+        elif connector_mode == 'voxel-hinge':
+            joint_connect_opt.add_voxel_hinges()
         refine_end_time = time.time()
 
         # Log the number of voxels after the joint connection and show the result

@@ -168,7 +168,10 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                genetic_generation=5, max_trial_round=8, voxel_density=1.2e-4,
                connector_mode='motor', magnet_diameter=6.0,
                magnet_thickness=2.0, magnet_clearance=0.2,
-               cut_plane_direction='rotation-axis'):
+               cut_plane_direction='rotation-axis', hinge_joints='l_knee,r_knee',
+               hinge_outer_diameter=10.0, hinge_ear_thickness=3.0,
+               hinge_axial_clearance=0.5, hinge_pin_diameter=3.0,
+               hinge_root_length=5.0):
     args = AutoDesignArgs()
     args.stl_mesh_path = os.path.abspath(stl_path)
     args.joint_pkl_path = os.path.abspath(joints_path)
@@ -197,6 +200,12 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.magnet_thickness = magnet_thickness / 10.0
     args.magnet_clearance = magnet_clearance / 10.0
     args.cut_plane_direction = cut_plane_direction
+    args.hinge_joints = hinge_joints
+    args.hinge_outer_diameter = hinge_outer_diameter / 10.0
+    args.hinge_ear_thickness = hinge_ear_thickness / 10.0
+    args.hinge_axial_clearance = hinge_axial_clearance / 10.0
+    args.hinge_pin_diameter = hinge_pin_diameter / 10.0
+    args.hinge_root_length = hinge_root_length / 10.0
     return args
 
 
@@ -307,12 +316,33 @@ def _run_tenon_postprocess(args_cli, report, round_folder, parts_mm_folder, out_
     report['paths']['tenon_parts_mm_folder'] = tenon_parts
 
 
+def _export_voxel_hinge_pins(args_cli, out_dir):
+    """Export separate straight pins for voxel-native hinge joints."""
+    import trimesh
+    pin_dir = os.path.join(out_dir, 'hinge_pins')
+    os.makedirs(pin_dir, exist_ok=True)
+    length = (3.0 * args_cli.hinge_ear_thickness
+              + 2.0 * args_cli.hinge_axial_clearance + 1.0)
+    files = []
+    for joint_name in (
+            name.strip() for name in args_cli.hinge_joints.split(',') if name.strip()):
+        pin = trimesh.creation.cylinder(
+            radius=args_cli.hinge_pin_diameter / 2.0,
+            height=length, sections=48)
+        path = os.path.join(pin_dir, joint_name + '_pin.stl')
+        pin.export(path)
+        files.append(path)
+    return files
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Single agent-friendly entry point for something2robot.'
     )
     parser.add_argument('--model', type=str, required=True,
                         help='Model name prefix (case-insensitive), e.g. lamp or Cactus')
+    parser.add_argument('--joints-pkl-override', default=None,
+                        help='Use an explicit annotation pkl without replacing the model default')
     parser.add_argument('--expected-x', type=float, default=100.0,
                         help='Expected x-axis length in mm (default: 100.0)')
     parser.add_argument('--voxel-size', type=float, default=1.0,
@@ -327,8 +357,15 @@ def main():
                         help='Repair disconnected STL links by keeping largest component')
     parser.add_argument('--skip-motors', action='store_true',
                         help='Skip motor visualization export')
-    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'tenon', 'none'), default='motor',
+    parser.add_argument('--connector-mode', choices=('motor', 'magnet', 'tenon', 'voxel-hinge', 'none'), default='motor',
                         help='Joint interface: motor, experimental magnet, fitted coaxial tenon, or plain split')
+    parser.add_argument('--hinge-joints', default='l_knee,r_knee',
+                        help='Comma-separated joint names for voxel-hinge mode')
+    parser.add_argument('--hinge-outer-diameter', type=float, default=10.0)
+    parser.add_argument('--hinge-ear-thickness', type=float, default=3.0)
+    parser.add_argument('--hinge-axial-clearance', type=float, default=0.5)
+    parser.add_argument('--hinge-pin-diameter', type=float, default=3.0)
+    parser.add_argument('--hinge-root-length', type=float, default=5.0)
     parser.add_argument('--magnet-diameter', type=float, default=6.0,
                         help='Magnet diameter in mm, used with --connector-mode magnet (default: 6.0)')
     parser.add_argument('--magnet-thickness', type=float, default=2.0,
@@ -360,6 +397,18 @@ def main():
             parser.error('--magnet-diameter and --magnet-thickness must be positive')
         if args_cli.magnet_clearance < 0:
             parser.error('--magnet-clearance cannot be negative')
+    if args_cli.connector_mode == 'voxel-hinge':
+        positive = {
+            '--hinge-outer-diameter': args_cli.hinge_outer_diameter,
+            '--hinge-ear-thickness': args_cli.hinge_ear_thickness,
+            '--hinge-pin-diameter': args_cli.hinge_pin_diameter,
+            '--hinge-root-length': args_cli.hinge_root_length,
+        }
+        invalid = [name for name, value in positive.items() if value <= 0]
+        if invalid:
+            parser.error(', '.join(invalid) + ' must be positive')
+        if args_cli.hinge_axial_clearance < 0:
+            parser.error('--hinge-axial-clearance cannot be negative')
     if args_cli.connector_mode == 'tenon':
         positive = {
             '--tenon-radius': args_cli.tenon_radius,
@@ -417,6 +466,10 @@ def main():
     # Resolve model
     try:
         model_stem, stl_path, joints_path = resolve_model(args_cli.model)
+        if args_cli.joints_pkl_override:
+            joints_path = os.path.abspath(args_cli.joints_pkl_override)
+            if not os.path.isfile(joints_path):
+                raise FileNotFoundError(f'Joint override not found: {joints_path}')
         print(f"Resolved model: {model_stem}")
         print(f"  STL:   {stl_path}")
         print(f"  Joints: {joints_path}")
@@ -452,6 +505,12 @@ def main():
         magnet_thickness=args_cli.magnet_thickness,
         magnet_clearance=args_cli.magnet_clearance,
         cut_plane_direction=args_cli.cut_plane_direction,
+        hinge_joints=args_cli.hinge_joints,
+        hinge_outer_diameter=args_cli.hinge_outer_diameter,
+        hinge_ear_thickness=args_cli.hinge_ear_thickness,
+        hinge_axial_clearance=args_cli.hinge_axial_clearance,
+        hinge_pin_diameter=args_cli.hinge_pin_diameter,
+        hinge_root_length=args_cli.hinge_root_length,
     )
 
     design_start = time.time()
@@ -506,6 +565,14 @@ def main():
         report['parts_mm_stl_files'] = exported_mm
     except Exception as e:
         report['notes'].append(f"export_stl_to_mm failed: {e}")
+
+    if args_cli.connector_mode == 'voxel-hinge':
+        try:
+            pin_files = _export_voxel_hinge_pins(args_cli, out_dir)
+            report['paths']['hinge_pins_folder'] = os.path.dirname(pin_files[0])
+            report['hinge_pin_files'] = pin_files
+        except Exception as e:
+            report['notes'].append(f'hinge pin export failed: {e}')
 
     # Check/repair links
     try:

@@ -653,6 +653,142 @@ class Joint_Connect_Opt:
             direction_mode = getattr(self.args, 'cut_plane_direction', 'rotation-axis')
             print(f"Flattened interfaces at {flat_cut_count} joint(s) using {direction_mode} normals.")
 
+    def add_voxel_hinges(self):
+        """Generate integrated three-knuckle hinges in the global voxel grid.
+
+        This prototype intentionally targets explicitly named 1-DOF joints.
+        Parent voxels form the two outer ears, child voxels form the center
+        ear, and the coaxial pin bore remains Unoccupied.  All dimensions are
+        in the core's centimetre convention.
+        """
+        requested = {
+            name.strip() for name in
+            getattr(self.args, 'hinge_joints', 'l_knee,r_knee').split(',')
+            if name.strip()
+        }
+        if not requested:
+            raise ValueError('hinge_joints cannot be empty')
+
+        ear = self.args.hinge_ear_thickness
+        gap = self.args.hinge_axial_clearance
+        outer_radius = self.args.hinge_outer_diameter / 2.0
+        pin_radius = self.args.hinge_pin_diameter / 2.0
+        root_length = self.args.hinge_root_length
+        if min(ear, outer_radius, pin_radius, root_length) <= 0 or gap < 0:
+            raise ValueError('hinge dimensions must be positive and clearance non-negative')
+        if pin_radius + self.args.voxel_size * 0.5 >= outer_radius:
+            raise ValueError('hinge pin hole leaves no printable ear wall')
+
+        all_groups = list(self.mesh_decomp.mesh_group.link_value_dict.keys())
+        generated = []
+        queue = [self.mesh_decomp.link_tree]
+        while queue:
+            node = queue.pop(0)
+            queue.extend(node.children)
+            link = node.val
+            if link.axis is None or len(link.axis) != 2:
+                continue
+            parent_name = self.father_dict.get(link.name)
+            if parent_name is None:
+                continue
+            parent_joints = self.father_dict_ori[link.name].joints
+            shared = [name for name in link.joints if name in parent_joints]
+            if len(shared) != 1 or shared[0] not in requested:
+                continue
+
+            joint_name = shared[0]
+            center = np.asarray(link.joints[joint_name], dtype=float)
+            axis = np.asarray(link.axis[1], dtype=float)
+            axis /= np.linalg.norm(axis)
+            other_points = np.asarray(
+                [point for name, point in link.joints.items() if name != joint_name],
+                dtype=float)
+            if len(other_points) == 0:
+                raise RuntimeError(f'{joint_name}: cannot derive child direction')
+            child_dir = other_points.mean(axis=0) - center
+            child_dir -= np.dot(child_dir, axis) * axis
+            child_dir /= np.linalg.norm(child_dir)
+            side_dir = np.cross(axis, child_dir)
+            side_dir /= np.linalg.norm(side_dir)
+
+            half_span = 1.5 * ear + gap
+            envelope_radius = outer_radius + self.args.voxel_size
+
+            def coordinates(pts):
+                rel = pts - center
+                axial = np.dot(rel, axis)
+                childwise = np.dot(rel, child_dir)
+                sideways = np.dot(rel, side_dir)
+                radial = np.sqrt(childwise ** 2 + sideways ** 2)
+                return axial, childwise, sideways, radial
+
+            def in_envelope(pts):
+                axial, _, _, radial = coordinates(pts)
+                return np.logical_and(
+                    np.abs(axial) <= half_span + self.args.voxel_size,
+                    radial <= envelope_radius)
+
+            # Remove the old jagged interface so the three independent ears
+            # are the only material inside the joint envelope.
+            self.mesh_decomp.mesh_group.move_voxels(
+                all_groups, 'Unoccupied', in_envelope)
+
+            def parent_solid(pts):
+                axial, childwise, sideways, radial = coordinates(pts)
+                ears = np.logical_and.reduce((
+                    np.abs(axial) >= ear / 2.0 + gap,
+                    np.abs(axial) <= half_span,
+                    radial <= outer_radius))
+                roots = np.logical_and.reduce((
+                    np.abs(axial) >= ear / 2.0 + gap,
+                    np.abs(axial) <= half_span,
+                    childwise <= 0,
+                    childwise >= -root_length,
+                    np.abs(sideways) <= outer_radius * 0.72))
+                return np.logical_or(ears, roots)
+
+            def child_solid(pts):
+                axial, childwise, sideways, radial = coordinates(pts)
+                ear_center = np.logical_and.reduce((
+                    np.abs(axial) <= ear / 2.0,
+                    radial <= outer_radius))
+                root = np.logical_and.reduce((
+                    np.abs(axial) <= ear / 2.0,
+                    childwise >= 0,
+                    childwise <= root_length,
+                    np.abs(sideways) <= outer_radius * 0.72))
+                return np.logical_or(ear_center, root)
+
+            parent_added = self.mesh_decomp.mesh_group.move_voxels(
+                ['Unoccupied'], parent_name, parent_solid)
+            child_added = self.mesh_decomp.mesh_group.move_voxels(
+                ['Unoccupied'], link.name, child_solid)
+
+            def pin_bore(pts):
+                axial, _, _, radial = coordinates(pts)
+                return np.logical_and(
+                    np.abs(axial) <= half_span + self.args.voxel_size,
+                    radial <= pin_radius)
+
+            self.mesh_decomp.mesh_group.move_voxels(
+                [parent_name, link.name], 'Unoccupied', pin_bore)
+
+            protected = np.vstack((parent_added, child_added))
+            if len(protected):
+                indices = self.mesh_decomp.mesh_group.position_to_index(protected)
+                self.mesh_decomp.mesh_group.voxel_no_removal[
+                    indices[:, 0], indices[:, 1], indices[:, 2]] = 1
+            generated.append(joint_name)
+            print(
+                f'Voxel hinge {joint_name}: parent={parent_name}, child={link.name}, '
+                f'axis={axis.round(3)}, child_dir={child_dir.round(3)}')
+
+        missing = requested - set(generated)
+        if missing:
+            raise ValueError('Requested hinge joints not found as 1-DOF child joints: '
+                             + ', '.join(sorted(missing)))
+        return generated
+
     def add_magnet_pockets(self):
         """Carve blind cylindrical magnet pockets into both sides of each joint,
         with flat interface cutting beforehand."""
