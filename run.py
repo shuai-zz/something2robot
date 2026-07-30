@@ -174,7 +174,9 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
                hinge_root_length=5.0, hinge_angle_min=-45.0,
                hinge_angle_max=45.0, hinge_angle_step=5.0,
                hinge_motion_clearance=0.5, hinge_motion_radius=15.0,
-               hinge_axis_override=None, ball_joints='l_hip,r_hip',
+               hinge_axis_override=None, hinge_style='knuckle',
+               hinge_section_width=14.0, hinge_slot_depth=7.0,
+               hinge_tongue_thickness=6.0, ball_joints='l_hip,r_hip',
                ball_axis='0,1,0', ball_diameter=11.0,
                ball_clearance=0.5, ball_socket_wall=2.0,
                ball_neck_diameter=4.0, ball_neck_length=4.0,
@@ -219,6 +221,10 @@ def build_args(stl_path, joints_path, out_dir, expected_x, voxel_size, seed,
     args.hinge_motion_clearance = hinge_motion_clearance / 10.0
     args.hinge_motion_radius = hinge_motion_radius / 10.0
     args.hinge_axis_override = hinge_axis_override
+    args.hinge_style = hinge_style
+    args.hinge_section_width = hinge_section_width / 10.0
+    args.hinge_slot_depth = hinge_slot_depth / 10.0
+    args.hinge_tongue_thickness = hinge_tongue_thickness / 10.0
     args.ball_joints = ball_joints
     args.ball_axis = ball_axis
     args.ball_diameter = ball_diameter / 10.0
@@ -398,6 +404,15 @@ def main():
                         help='Radius of the local child motion envelope in mm')
     parser.add_argument('--hinge-axis-override', default=None,
                         help='Global hinge/pin axis as x,y,z; e.g. 0,1,0')
+    parser.add_argument('--hinge-style', choices=('knuckle', 'section'),
+                        default='knuckle',
+                        help='Small round knuckles or a full leg-section slot/tongue')
+    parser.add_argument('--hinge-section-width', type=float, default=14.0,
+                        help='Total width of section hinge across the pin axis in mm')
+    parser.add_argument('--hinge-slot-depth', type=float, default=7.0,
+                        help='Depth cut upward into the parent leg in mm')
+    parser.add_argument('--hinge-tongue-thickness', type=float, default=6.0,
+                        help='Child tongue width across the pin axis in mm')
     parser.add_argument('--ball-joints', default='l_hip,r_hip')
     parser.add_argument('--ball-axis', default='0,1,0',
                         help='Insertion direction before left/right mirroring')
@@ -446,6 +461,9 @@ def main():
             '--hinge-pin-diameter': args_cli.hinge_pin_diameter,
             '--hinge-root-length': args_cli.hinge_root_length,
             '--hinge-motion-radius': args_cli.hinge_motion_radius,
+            '--hinge-section-width': args_cli.hinge_section_width,
+            '--hinge-slot-depth': args_cli.hinge_slot_depth,
+            '--hinge-tongue-thickness': args_cli.hinge_tongue_thickness,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:
@@ -586,6 +604,10 @@ def main():
         hinge_motion_clearance=args_cli.hinge_motion_clearance,
         hinge_motion_radius=args_cli.hinge_motion_radius,
         hinge_axis_override=args_cli.hinge_axis_override,
+        hinge_style=args_cli.hinge_style,
+        hinge_section_width=args_cli.hinge_section_width,
+        hinge_slot_depth=args_cli.hinge_slot_depth,
+        hinge_tongue_thickness=args_cli.hinge_tongue_thickness,
         ball_joints=args_cli.ball_joints,
         ball_axis=args_cli.ball_axis,
         ball_diameter=args_cli.ball_diameter,

@@ -679,6 +679,12 @@ class Joint_Connect_Opt:
         angle_step = self.args.hinge_angle_step
         motion_clearance = self.args.hinge_motion_clearance
         motion_radius = self.args.hinge_motion_radius
+        hinge_style = getattr(self.args, 'hinge_style', 'knuckle')
+        section_width = getattr(self.args, 'hinge_section_width',
+                                self.args.hinge_outer_diameter)
+        slot_depth = getattr(self.args, 'hinge_slot_depth',
+                             self.args.hinge_root_length)
+        tongue = getattr(self.args, 'hinge_tongue_thickness', ear)
         axis_override_text = getattr(self.args, 'hinge_axis_override', None)
         axis_override = None
         if axis_override_text:
@@ -690,6 +696,8 @@ class Joint_Connect_Opt:
             axis_override /= np.linalg.norm(axis_override)
         if min(ear, outer_radius, pin_radius, root_length) <= 0 or gap < 0:
             raise ValueError('hinge dimensions must be positive and clearance non-negative')
+        if hinge_style == 'section' and tongue + 2.0 * gap >= section_width:
+            raise ValueError('section hinge tongue and clearances leave no parent ears')
         if pin_radius + self.args.voxel_size * 0.5 >= outer_radius:
             raise ValueError('hinge pin hole leaves no printable ear wall')
 
@@ -733,7 +741,8 @@ class Joint_Connect_Opt:
             side_dir = np.cross(axis, child_dir)
             side_dir /= np.linalg.norm(side_dir)
 
-            half_span = 1.5 * ear + gap
+            half_span = (section_width / 2.0 if hinge_style == 'section'
+                         else 1.5 * ear + gap)
             # Clear the original curved knee over the whole root length.  A
             # small cylinder around the knuckles alone leaves the original
             # parent/child cut surfaces touching outside the ears, which
@@ -756,7 +765,13 @@ class Joint_Connect_Opt:
                     indices[:, 0], indices[:, 1], indices[:, 2]]
 
             def in_envelope(pts):
-                axial, _, _, radial = coordinates(pts)
+                axial, childwise, sideways, radial = coordinates(pts)
+                if hinge_style == 'section':
+                    return np.logical_and.reduce((
+                        np.abs(axial) <= half_span + self.args.voxel_size,
+                        childwise >= -slot_depth - self.args.voxel_size,
+                        childwise <= root_length + self.args.voxel_size,
+                        np.abs(sideways) <= half_span + self.args.voxel_size))
                 return np.logical_and(
                     np.abs(axial) <= half_span + self.args.voxel_size,
                     radial <= envelope_radius)
@@ -768,6 +783,16 @@ class Joint_Connect_Opt:
 
             def parent_solid(pts):
                 axial, childwise, sideways, radial = coordinates(pts)
+                if hinge_style == 'section':
+                    # Keep the original thigh cross-section except for a deep
+                    # central slot. The two remaining sides are the hinge ears.
+                    ears = np.logical_and.reduce((
+                        np.abs(axial) >= tongue / 2.0 + gap,
+                        np.abs(axial) <= half_span,
+                        childwise >= -slot_depth,
+                        childwise <= self.args.voxel_size * 0.5,
+                        np.abs(sideways) <= half_span))
+                    return np.logical_and(ears, inside_original(pts))
                 ears = np.logical_and.reduce((
                     np.abs(axial) >= ear / 2.0 + gap,
                     np.abs(axial) <= half_span,
@@ -782,6 +807,15 @@ class Joint_Connect_Opt:
 
             def child_solid(pts):
                 axial, childwise, sideways, radial = coordinates(pts)
+                if hinge_style == 'section':
+                    # Extend the lower-leg cross-section upward as one broad
+                    # tongue which fits between the parent ears.
+                    tongue_solid = np.logical_and.reduce((
+                        np.abs(axial) <= tongue / 2.0,
+                        childwise >= -slot_depth,
+                        childwise <= root_length,
+                        np.abs(sideways) <= half_span * 0.9))
+                    return np.logical_and(tongue_solid, inside_original(pts))
                 ear_center = np.logical_and.reduce((
                     np.abs(axial) <= ear / 2.0,
                     radial <= outer_radius))
@@ -887,7 +921,8 @@ class Joint_Connect_Opt:
             generated.append(joint_name)
             print(
                 f'Voxel hinge {joint_name}: parent={parent_name}, child={link.name}, '
-                f'axis={axis.round(3)}, child_dir={child_dir.round(3)}')
+                f'style={hinge_style}, axis={axis.round(3)}, '
+                f'child_dir={child_dir.round(3)}')
 
         missing = requested - set(generated)
         if missing:
