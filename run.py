@@ -341,6 +341,8 @@ def main():
     )
     parser.add_argument('--model', type=str, required=True,
                         help='Model name prefix (case-insensitive), e.g. lamp or Cactus')
+    parser.add_argument('--stl-path-override', default=None,
+                        help='Use an explicit source STL while retaining the resolved model name')
     parser.add_argument('--joints-pkl-override', default=None,
                         help='Use an explicit annotation pkl without replacing the model default')
     parser.add_argument('--expected-x', type=float, default=100.0,
@@ -466,6 +468,11 @@ def main():
     # Resolve model
     try:
         model_stem, stl_path, joints_path = resolve_model(args_cli.model)
+        if args_cli.stl_path_override:
+            stl_path = os.path.abspath(args_cli.stl_path_override)
+            if not os.path.isfile(stl_path):
+                raise FileNotFoundError(f'STL override not found: {stl_path}')
+            model_stem = os.path.splitext(os.path.basename(stl_path))[0]
         if args_cli.joints_pkl_override:
             joints_path = os.path.abspath(args_cli.joints_pkl_override)
             if not os.path.isfile(joints_path):
