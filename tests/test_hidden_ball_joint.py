@@ -57,3 +57,27 @@ def test_hidden_ball_joint_rejects_invalid_dimensions(cfg):
             np.array([0.0, 0.0, -1.0]),
             cfg,
         )
+
+
+def test_detachable_pin_joint_is_watertight_and_exports_pin():
+    parent = trimesh.creation.box([20, 20, 12])
+    parent.apply_translation([0, 0, 6])
+    child = trimesh.creation.box([20, 20, 12])
+    child.apply_translation([0, 0, -6])
+    parent, child, pin, info = JOINTS.detachable_pin_joint(
+        parent, child, np.zeros(3), np.zeros(3),
+        np.array([0.0, 0.0, -1.0]), {})
+    assert parent.is_watertight
+    assert child.is_watertight
+    assert pin.is_watertight
+    assert info['pin_length'] == pytest.approx(11.3)
+
+
+@pytest.mark.parametrize('role', ['stud', 'socket'])
+def test_short_hinge_connector_is_watertight(role):
+    full = JOINTS.hinge_connector(role, JOINTS.PEG_FULL_DEPTH)
+    short = JOINTS.hinge_connector(role, 6.0)
+    assert full.is_watertight
+    assert short.is_watertight
+    assert len(short.split(only_watertight=False)) == 1
+    assert short.volume < full.volume

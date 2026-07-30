@@ -46,6 +46,8 @@ JOINT_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 PEG_CUTTER_PATH = os.path.join(JOINT_MODELS_DIR, 'peg_joint',
                                '7mm_keyed_peg_hole_cutter_clearance_0p30.stl')
 PEG_FULL_DEPTH = 11.5  # cutter spans z=0 (entry) .. z=11.5 (deep end)
+HINGE_DIR = os.path.join(JOINT_MODELS_DIR, 'peg_joint')
+BARE_HINGE_DIR = os.path.join(JOINT_MODELS_DIR, 'only_joint')
 
 # Joint plans per model. depth_parent / depth_child override PEG_FULL_DEPTH.
 JOINT_PLANS = {
@@ -217,7 +219,7 @@ def load_joint_plan(value, joints_pkl):
       [{"joint": "neck",  "type": "magnet", "parent": "BODY", "child": "HEAD"},
        {"joint": "l_hip", "type": "peg", "parent": "BODY", "child": "L_LEG",
         "depth_child": 6.0, "axis": [0, 0, -1]}]
-    Keys: joint (annotation name), type (peg|magnet|ball), parent, child,
+    Keys: joint (annotation name), type (peg|magnet|ball|hinge|pin), parent, child,
     optional depth_parent / depth_child (mm, default 11.5), axis (direction
     override, default: shared joint -> farthest other joint of the child).
     Ball joints additionally accept ball_diameter, ball_clearance,
@@ -366,6 +368,73 @@ def hidden_ball_joint(parent_mesh, child_mesh, parent_surface, child_surface,
         'ball_center': ball_center.round(3).tolist(),
     }
     return parent, child, info
+
+
+def detachable_pin_joint(parent_mesh, child_mesh, parent_surface, child_surface,
+                         direction_into_child, cfg):
+    """Carve two blind coaxial holes and return a separate printable pin."""
+    d_child = np.asarray(direction_into_child, dtype=float)
+    d_child /= np.linalg.norm(d_child)
+    diameter = float(cfg.get('pin_diameter', 3.0))
+    clearance = float(cfg.get('pin_clearance', 0.2))
+    depth_parent = float(cfg.get('depth_parent', 6.0))
+    depth_child = float(cfg.get('depth_child', 6.0))
+    tip_clearance = float(cfg.get('pin_tip_clearance', 0.35))
+    if diameter <= 0 or clearance < 0 or min(depth_parent, depth_child) <= 0:
+        raise ValueError('pin diameter/depths must be positive and clearance non-negative')
+    if tip_clearance < 0 or 2 * tip_clearance >= depth_parent + depth_child:
+        raise ValueError('pin_tip_clearance is incompatible with the pin depths')
+
+    hole_radius = diameter / 2.0 + clearance
+
+    def hole(surface, direction, depth):
+        return cylinder_along(
+            direction, hole_radius, depth + 1.0,
+            np.asarray(surface, dtype=float) + direction * (depth / 2.0 - 0.25))
+
+    parent = parent_mesh.difference(
+        hole(parent_surface, -d_child, depth_parent), engine='manifold')
+    child = child_mesh.difference(
+        hole(child_surface, d_child, depth_child), engine='manifold')
+    pin_length = depth_parent + depth_child - 2.0 * tip_clearance
+    pin = trimesh.creation.cylinder(
+        radius=diameter / 2.0, height=pin_length, sections=48)
+    info = {
+        'pin_diameter': diameter,
+        'pin_clearance': clearance,
+        'depth_parent': depth_parent,
+        'depth_child': depth_child,
+        'pin_tip_clearance': tip_clearance,
+        'pin_length': pin_length,
+    }
+    return parent, child, pin, info
+
+
+def hinge_connector(role, peg_depth):
+    """Load a library hinge half and shorten its keyed insertion stem.
+
+    Library convention: the stud stem extends from the bare hinge toward +Y;
+    the socket stem extends toward -Y.  Cropping only the stem preserves the
+    hinge knuckle and its pin/snap geometry.
+    """
+    if role not in ('stud', 'socket'):
+        raise ValueError("hinge role must be 'stud' or 'socket'")
+    if peg_depth <= 0 or peg_depth > PEG_FULL_DEPTH:
+        raise ValueError(f'hinge peg depth must be in (0, {PEG_FULL_DEPTH}]')
+    filename = f'hinge_joint_{role}.stl'
+    mesh = trimesh.load(os.path.join(HINGE_DIR, filename))
+    if peg_depth >= PEG_FULL_DEPTH:
+        return mesh
+    bare = trimesh.load(os.path.join(BARE_HINGE_DIR, filename))
+    lo = mesh.bounds[0] - 2.0
+    hi = mesh.bounds[1] + 2.0
+    if role == 'stud':
+        hi[1] = bare.bounds[1, 1] + peg_depth
+    else:
+        lo[1] = bare.bounds[0, 1] - peg_depth
+    crop = trimesh.creation.box(extents=hi - lo)
+    crop.apply_translation((hi + lo) / 2.0)
+    return mesh.intersection(crop, engine='manifold')
 
 
 def bay_metrics(mesh, pos, open_dir, R, size, lip, capsules):
@@ -655,10 +724,31 @@ def main():
                   f'{np.asarray(ball_info["ball_center"]).round(2)}')
             continue
 
-        if jtype != 'peg':
+        if jtype == 'pin':
+            surf_p = ray_surface(links[parent_name], jpos, dir_child)
+            surf_c = ray_surface(links[child_name], jpos, -dir_child)
+            parent, child, pin, pin_info = detachable_pin_joint(
+                links[parent_name], links[child_name],
+                surf_p, surf_c, dir_child, cfg)
+            links[parent_name], links[child_name] = parent, child
+            pin_path = os.path.join(args.out_dir, f'{jname}_pin.stl')
+            pin.export(pin_path)
+            report.append({
+                'joint': jname, 'type': jtype,
+                'parent': {'link': parent_name, 'watertight': bool(parent.is_watertight)},
+                'child': {'link': child_name, 'watertight': bool(child.is_watertight)},
+                'pin_file': os.path.basename(pin_path),
+                **pin_info,
+            })
+            print(f'[pin] {jname}: {parent_name}/{child_name} watertight='
+                  f'{parent.is_watertight}/{child.is_watertight}, '
+                  f'pin -> {pin_path}')
+            continue
+
+        if jtype not in ('peg', 'hinge'):
             raise ValueError(
                 f"unsupported joint type {jtype!r} for joint {jname!r}; "
-                "expected peg, magnet, ball, or hardware_bay")
+                "expected peg, magnet, ball, hinge, pin, or hardware_bay")
 
         # peg holes on both parent and child.
         # The hole must open at the link's ACTUAL cut face, which is not
@@ -709,8 +799,22 @@ def main():
                  'peg': {'parent_entry': surf_p.round(2).tolist(), 'child_entry': surf_c.round(2).tolist(),
                          'dir_into_child': dir_child.round(4).tolist()}}
         report.append(entry)
-        print(f'[peg] {jname}: {parent_name} watertight={parent.is_watertight} (depth {d_parent}), '
+        print(f'[{jtype}] {jname}: {parent_name} watertight={parent.is_watertight} (depth {d_parent}), '
               f'{child_name} watertight={child.is_watertight} (depth {d_child})')
+
+        if jtype == 'hinge':
+            parent_half = hinge_connector('socket', d_parent)
+            child_half = hinge_connector('stud', d_child)
+            parent_file = f'{jname}_hinge_parent_socket.stl'
+            child_file = f'{jname}_hinge_child_stud.stl'
+            parent_half.export(os.path.join(args.out_dir, parent_file))
+            child_half.export(os.path.join(args.out_dir, child_file))
+            entry['hinge'] = {
+                'parent_connector': parent_file,
+                'child_connector': child_file,
+                'parent_connector_watertight': bool(parent_half.is_watertight),
+                'child_connector_watertight': bool(child_half.is_watertight),
+            }
 
     # wall check between holes drilled from opposite ends of the same link
     print('\n-- hole wall check --')
